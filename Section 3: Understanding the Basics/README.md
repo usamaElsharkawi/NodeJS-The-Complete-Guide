@@ -88,3 +88,44 @@ npm start         # node app.ts   (or: node --watch app.ts for auto-restart)
 - **Biome / Prettier / ESLint / dotenv deferred** — not in scope for now.
 
 ---
+
+# Lecture 26: Understanding the request listener (createServer)
+
+## What I learned
+- The **first argument** to `http.createServer(...)` is the `requestListener` function — Node
+  calls it **once per incoming HTTP request** (it is the `'request'` event handler).
+- `req` is the incoming request (`http.IncomingMessage`); `res` is the outgoing response
+  (`http.ServerResponse`) you write to.
+- The server only starts accepting traffic after `server.listen(...)` — before that it is
+  just a `Server` object (an `EventEmitter` subclass) that exists in memory.
+
+## TypeScript mapping
+- `import http from "node:http"` (ESM default import). `@types/node` ships the types, so:
+  - `req` is typed as `IncomingMessage` (a readable stream).
+  - `res` is typed as `ServerResponse` (a writable stream).
+- Every request handler **must end the response** — either `res.end()` or `res.writeHead(...)` + `res.end(...)`. Otherwise the client **hangs until socket timeout** (the underlying writable stream is never closed).
+- `server` is `http.Server` (extends `EventEmitter`), so you can also attach events:
+  `server.on('listening', ...)`, `server.on('error', ...)`.
+
+## Notes & gotchas
+- `res.end()` returns void — always call it as the last statement in the handler body, or
+  the request never completes (silent hang). `console.log(req)` alone does not send a response
+  back to the client.
+- If you destructure `server.address()` (for logging), TS narrows it as `AddressInfo | string | null`,
+  so null-check + `typeof === 'object'` guards are needed — TS saves you from JS footguns here.
+
+## Notes & gotchas (listen method)
+- `server.listen()` is intentionally **non-blocking** and **async** — it starts binding to the OS
+  port/socket and returns immediately (the `Server` object); you must NOT chain logic right after it.
+- Use the **callback** (or `'listening'` event) to know the server is truly accepting connections:
+  `server.listen(PORT, () => { ... })`.
+- The most common early failure is `EADDRINUSE` (port in use). Always wire up an `'error'` handler
+  to catch it and retry another port — otherwise Node throws, exits the process, and the loop dies.
+- `server.listen(0)` → OS picks a free ephemeral port (great for dynamic assignment / tests).
+- For production: bind to a specific interface (`server.listen(PORT, HOST)`) rather than relying
+  on `0.0.0.0` defaults; and prefer a reverse proxy (nginx) in front.
+- TS signature: `listen(port: number, hostname: string, backlog: number, listeningListener?: () => void): this`.
+  The `.address()` return is typed as `AddressInfo | string | null` — hence the `typeof === 'object'`
+  narrowing before reading `.port`/`.address`.
+
+---

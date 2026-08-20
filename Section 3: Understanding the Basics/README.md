@@ -424,3 +424,88 @@ process.on("SIGTERM", () => shutdown("SIGTERM"));
 - `listen(0)` → OS-assigned ephemeral port; always read `server.address()` to learn which one.
 - Privileged ports (<1024) usually require elevated permissions.
 
+---
+
+# Lecture 29: Understanding Requests
+
+## What I learned
+- Lecture 29 digs into the **`req` object** — the first argument the request listener receives on
+  every request. Formally it is an `http.IncomingMessage`. The single most important idea: **it is a
+  Readable stream** — some data is available as properties immediately (connection metadata), but the
+  **body is streamed** and must be read with event listeners. There is **no `req.body` built in**
+  (a common JS misconception).
+- `IncomingMessage` **extends `stream.Readable`**. So metadata properties are ready the moment the
+  request arrives, while the body arrives asynchronously via `'data'`/`'end'` events.
+
+### The most important properties
+- `req.url` — the **path + query** requested (e.g. `/users?page=2`). Does **not** include
+  protocol/host (those live in headers).
+- `req.method` — the HTTP verb (`GET`, `POST`, `PUT`, `DELETE`…). Conceptually defaults to `GET`.
+- `req.headers` — key/value object of request headers (`Host`, `Accept`, `Content-Type`, `User-Agent`…).
+- `req.httpVersion` — e.g. `"1.1"` — the HTTP protocol version.
+- `req.socket` — the underlying TCP socket; exposes `remoteAddress` / `remotePort` (who connected).
+- `req.rawHeaders` — flat `[key, val, key, val, …]` array (preserves duplicates/order vs `headers`).
+- `req.complete` — `true` once the full request (incl. body) has been received.
+
+### Reading the body (the stream part)
+- There is **no `req.body`**. The body comes in as chunks you collect:
+  ```ts
+  import http, { IncomingMessage, ServerResponse } from "node:http";
+
+  const server = http.createServer((req: IncomingMessage, res: ServerResponse) => {
+    const chunks: Buffer[] = [];
+    req.on("data", (chunk: Buffer) => { chunks.push(chunk); });
+    req.on("end", () => {
+      const body = Buffer.concat(chunks).toString();
+      console.log(req.method, req.url, body);
+      res.end("received");
+    });
+    req.on("error", (err: Error) => {
+      res.statusCode = 400;
+      res.end("bad request");
+    });
+  });
+  server.listen(3000);
+  ```
+- `req.on("data", ...)` fires **zero or more times** with `Buffer` chunks.
+- `req.on("end", ...)` fires once the body is fully received — **act on the body here**.
+- `GET` requests usually have no body, so `end` fires with no `data` chunks.
+- `req.setEncoding("utf8")` switches chunks to `string` instead of `Buffer`.
+
+### Extracting path + query safely (ties to Lecture 25)
+- `req.url` is only the path+query string. Use the Web `URL` API to get structured parts:
+  ```ts
+  const url = new URL(req.url ?? "", "http://localhost");
+  const pathname = url.pathname;              // "/users"
+  const page = url.searchParams.get("page");  // "2" | null
+  ```
+
+## TypeScript mapping
+- `req` is typed `IncomingMessage` (a `stream.Readable`); `res` is `ServerResponse`.
+- **`req.url` and `req.method` are `string | undefined`** — with `strict` + `exactOptionalPropertyTypes`
+  you **must** null-check before use:
+  ```ts
+  const url = req.url ?? "/";
+  const method = req.method ?? "GET";
+  ```
+  This is the #1 TS error vs the JS course (which treats `undefined` loosely).
+- **`req.headers` values are `string | string[] | undefined`** — a header can repeat (e.g. `Set-Cookie`)
+  or be absent, so guard with `typeof`:
+  ```ts
+  const ct = req.headers["content-type"]; // string | string[] | undefined
+  if (typeof ct === "string") { /* use it */ }
+  ```
+- `req.socket.remoteAddress` → `string | undefined` (client IP, for logging/rate-limiting).
+- Buffer handling is type-safe: chunks are `Buffer`; `Buffer.concat(chunks)` is correctly typed — no `any`.
+- The architecture is identical to JS; TS forces you to acknowledge `url`/`method`/`headers` may be
+  `undefined` — the safety the JS course skips.
+
+## Notes & gotchas
+- `req` = connection metadata (properties, ready now) + a body stream (chunks via `'data'`/`'end'`).
+- Properties answer **who/what/how**; the stream delivers **the payload**.
+- No `req.body` — collect the stream (frameworks like Express parse it later; the course teaches raw Node).
+- Always null-check `req.url` / `req.method` / `req.headers[...]` under strict TS.
+- Read the body inside `req.on("end", ...)`; handle `req.on("error", ...)` for malformed streams.
+- `req.rawHeaders` preserves order/duplicates that `req.headers` collapses.
+- Use `new URL(req.url ?? "", base)` to parse path + query safely.
+

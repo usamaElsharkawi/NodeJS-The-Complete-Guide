@@ -509,3 +509,92 @@ process.on("SIGTERM", () => shutdown("SIGTERM"));
 - `req.rawHeaders` preserves order/duplicates that `req.headers` collapses.
 - Use `new URL(req.url ?? "", base)` to parse path + query safely.
 
+---
+
+# Lecture 30: Sending Responses
+
+## What I learned
+- Lecture 30 is the mirror of Lecture 29: `req` is a **Readable** stream you *consume*, while `res` is
+  an `http.ServerResponse` — a **Writable** stream you *produce*. Sending a response means writing
+  bytes into `res` and then ending it.
+- `ServerResponse` **extends `stream.Writable`**. You push data with `res.write(...)` and signal "done"
+  with `res.end(...)`. The browser can only render once the response is *ended* and the connection closes.
+
+### The three things you control
+- **Status code** — `res.statusCode` (default `200`) or via `writeHead`.
+- **Headers** — `res.setHeader(...)` (or inside `writeHead`).
+- **Body** — `res.write(...)` / `res.end(body)`.
+
+### The methods
+- `res.end(body?)` — writes the (optional) final chunk **and closes** the response. **Must be called
+  exactly once.**
+- `res.write(chunk)` — writes a chunk *without* ending (for streaming). Returns `boolean`
+  (backpressure). You must still call `res.end()` after.
+- `res.setHeader(name, value)` — sets a response header (buffered until the first write/end).
+- `res.writeHead(status, headers?)` — sets status + headers **and flushes** them immediately.
+- `res.statusCode` / `res.statusMessage` — properties to set status before ending.
+
+### Minimal correct response
+```ts
+import http, { IncomingMessage, ServerResponse } from "node:http";
+
+const server = http.createServer((req: IncomingMessage, res: ServerResponse) => {
+  res.statusCode = 200;
+  res.setHeader("Content-Type", "text/plain");
+  res.end("Hello from Node!");
+});
+server.listen(3000);
+```
+- `res.end("Hello from Node!")` writes the body **and** ends the response. Until `end()` is called,
+  the browser keeps waiting — the silent **hang** warned about in Lecture 26.
+
+### Headers + status together
+```ts
+res.writeHead(201, {
+  "Content-Type": "application/json",
+  "X-Powered-By": "Node",
+});
+res.end(JSON.stringify({ ok: true }));
+```
+
+### Sending HTML (why Content-Type matters)
+- `res.end("<h1>Hi</h1>")` with default `text/plain` shows **raw tags**. Set the type so it renders:
+  ```ts
+  res.setHeader("Content-Type", "text/html; charset=utf-8");
+  res.end("<h1>مرحباً</h1>"); // charset=utf-8 → Arabic/unicode renders correctly
+  ```
+
+### Streaming with res.write (multiple chunks)
+```ts
+res.setHeader("Content-Type", "text/plain");
+res.write("chunk 1\n");
+res.write("chunk 2\n");
+res.end("chunk 3\n"); // still must end!
+```
+- `res.write` returns `false` when the internal buffer is full (backpressure) — advanced; remember
+  **every `write` must be followed by exactly one `end`**.
+
+## TypeScript mapping
+- `res` is typed `ServerResponse` (a `stream.Writable`) — autocompletion + safety on every method.
+- **Header value type is `number | string | string[]`** — `res.setHeader("X", 5)` is fine, but you
+  can't pass an object:
+  ```ts
+  res.setHeader("Content-Type", "text/html"); // ✅ string
+  ```
+- **`res.end` / `res.write` accept `string | Buffer`** — TS rejects other types (no accidental `end({})`).
+- `res.writeHead(statusCode, headers?)` returns `this` (chainable); `statusCode` is a `number`.
+- **Strict property order:** headers must be set **before** the first `write`/`end`. After the first
+  body byte is sent, the header block is locked — calling `setHeader`/`writeHead` again throws
+  `ERR_HTTP_HEADERS_SENT`.
+
+## Notes & gotchas
+- `res` is an outgoing Writable stream: **configure headers + status first, push body with `write`,
+  then `end` exactly once.**
+- Two failure modes (checklist items):
+  - **Hang** — never call `res.end()` → client waits forever (Lecture 26).
+  - **Double-end** — call `res.end()` twice → `ERR_STREAM_WRITE_AFTER_END` / headers already sent.
+    Exactly **one** `end` per request.
+- Set `Content-Type` (with `charset=utf-8`) so the browser renders HTML/unicode instead of raw text.
+- `res.writeHead` flushes headers immediately; `res.setHeader` buffers them until first write/end.
+- `res.write` returning `false` = backpressure (advanced) — still end the response once.
+

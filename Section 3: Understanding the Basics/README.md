@@ -129,3 +129,156 @@ npm start         # node app.ts   (or: node --watch app.ts for auto-restart)
   narrowing before reading `.port`/`.address`.
 
 ---
+
+# Lecture 27: The Node Lifecycle & Event Loop
+
+## What I learned
+
+### Event-driven architecture
+- The request listener passed to `http.createServer(fn)` is **not called by us** — Node calls it
+  automatically **whenever a request reaches our server**. This is the defining trait of
+  **event-driven architecture**: instead of writing a `while` loop that polls "any new request?",
+  we *register a callback* and Node *invokes* it when the event occurs. Control is **inverted** —
+  you hand Node a function value; Node decides when to run it.
+- The request listener is literally a **`'request'` event handler**. Under the hood:
+  `http.createServer(fn)` ≡ `new Server().on('request', fn)`.
+- `http.Server` **extends `EventEmitter`** — and `EventEmitter` is the bedrock of Node's
+  event-driven model. Anything that can emit events (servers, streams, the process itself)
+  inherits from it. Even `process.on('SIGINT', ...)` is another event-driven handler: the whole
+  runtime is event emitters all the way down.
+
+### The Node.js lifecycle (process level)
+- A Node process has a clear top-to-bottom lifecycle:
+  1. V8 engine + Node runtime initialize.
+  2. **Your code runs TOP-TO-BOTTOM, synchronously** (define listener, call `server.listen(3000)`).
+  3. Synchronous code finishes.
+  4. The **event loop keeps the process ALIVE** while events are pending.
+  5. The event loop empties → the process **EXITS**.
+- Node does **not** sit in a `while(true)` loop in your code. After synchronous code finishes, the
+  *only* reason the process stays alive is the event loop detecting **pending events** (an open
+  server, a timer, an open file handle). When nothing is pending, Node exits cleanly.
+- That is exactly why `server.listen(3000)` keeps the app running: it registers a pending event
+  source (the listening socket), so the loop waits instead of exiting.
+
+### The event loop (what keeps it alive)
+- The event loop is a set of **phases**, each a FIFO queue of callbacks, cycled repeatedly:
+  - **Timers**: `setTimeout` / `setInterval` callbacks whose time has elapsed.
+  - **Pending callbacks**: deferred I/O callbacks (rare, system-level).
+  - **Poll**: retrieves new I/O events, executes their callbacks, and waits for more.
+  - **Check**: `setImmediate` callbacks run here.
+  - **Close**: `'close'` event handlers (e.g. `server.close()` finishing).
+- Your **request listener fires inside the Poll phase** — where new connection/request events are
+  dispatched to your `requestListener`.
+
+### What is a "process"?
+- A **process** is a running instance of your program — an OS object with its own memory space, its
+  own JS heap, its own call stack, and its own event loop. Running `node app.ts` makes the OS create
+  a new process (with a PID) in which V8 runs your code and spins up the event loop.
+- Distinct from a **thread** (the event loop runs on one main thread inside that process) and from
+  the **OS** (which schedules the process and manages the network socket).
+
+### What is a "pending event"?
+- A **pending event** = an event that has been *registered* but hasn't *fired yet*, so the loop must
+  keep waiting for it. These keep the process alive:
+  - Listening socket (`server.listen(3000)`) → fires `'request'` when a request arrives.
+  - Timer (`setTimeout(fn, 1000)`) → fires when 1000ms elapse.
+  - Open file/socket handle (`fs.readFile`, open connection) → fires when I/O completes.
+  - `setInterval(fn, 500)` → stays pending forever (fires every 500ms).
+- Node's rule: **if there are zero pending events/handles, the event loop has nothing to wait for →
+  the process exits.** That's why `server.close()` lets the process exit once it's the last handle.
+
+### Does callback code execute synchronously?
+- **Yes — each individual callback runs synchronously, start to finish, on the single main thread.**
+  The *scheduling* is async (the callback is deferred to a later loop iteration), but the
+  *execution* of the callback body is synchronous and blocking for that moment.
+- Example: `server.listen(3000, () => console.log("A"))` then `console.log("B")` prints `B` first
+  (synchronous, immediate) then `A` (callback, later on the loop) — because `listen()` registers the
+  callback and returns instantly.
+- **Critical rule:** because only one callback runs at a time on the main thread, **if a callback does
+  something slow synchronously, it blocks the entire event loop** — no other request can be handled
+  until it finishes (e.g. a `while` busy-wait blocks every other request).
+
+### OS world: is the process multi-threaded?
+- **Yes — a Node.js process has multiple OS threads**, but your *JavaScript* runs on only **one** of
+  them (the main thread / event loop thread). The other threads are hidden infrastructure. So "Node is
+  single-threaded" really means: **your JS is single-threaded** (one call stack, one event loop); the
+  *process* is multi-threaded.
+- Threads inside a Node process:
+  - **Main thread** — runs the event loop and *all* your JavaScript, one callback at a time.
+  - **libuv thread pool** — default **4** worker threads (tunable via `UV_THREADPOOL_SIZE`), used for
+    operations that can't be done truly asynchronously by the OS.
+  - **V8 internal threads** — GC, JIT compiler, etc. (never touched directly).
+- Which operations use the thread pool:
+  - **Network I/O** (HTTP, DB over TCP) → OS kernel (epoll/kqueue/IOCP), **not** the pool — no block.
+  - **File I/O** (`fs.readFile`) → libuv thread pool — offloaded, no block.
+  - **DNS** (`dns.lookup`) → libuv thread pool — offloaded, no block.
+  - **CPU-heavy crypto / zlib** → libuv thread pool — offloaded, no block.
+  - **Your JS** (`while` loop, `JSON.parse`, `crypto` sync hashing) → **main thread — blocks everything**.
+- When you call `fs.readFile(path, cb)`: Node hands the read to a thread-pool worker; the main thread
+  is free (loop keeps serving); when done, Node queues the callback; on a future loop iteration the
+  `cb` runs **on the main thread** (synchronously, like every callback).
+- Incoming **network** requests are handled by the OS kernel and dispatched to your **main-thread**
+  listener — only *file/DNS/crypto* work spills onto the thread pool. So the threads do **not** serve
+  incoming requests directly.
+- The real bottleneck: because JS is single-threaded, **CPU-bound work in a callback kills
+  throughput**. The modern fix is **`worker_threads`** (separate API, not libuv's pool) for heavy
+  computation on its own thread. (Advanced, later topic.)
+
+## TypeScript mapping
+- Node's types carry the event-driven surface for free — you don't add types yourself:
+  - The request listener is `(req: IncomingMessage, res: ServerResponse) => void`.
+  - `http.Server extends EventEmitter` → `server.on("request" | "listening" | "error" | "close", listener)`;
+    event args are typed per event (`err: NodeJS.ErrnoException` for `'error'`).
+  - `process` is typed `NodeJS.Process`; `process.on("SIGINT", ...)` is another typed event handler.
+- Timers: `setTimeout(fn, ms)` returns `NodeJS.Timeout` (clear with `clearTimeout(t)`).
+- The lifecycle/event-loop is runtime behavior, so TS mostly types the *surfaces* you touch
+  (process, server events, listener args, timer handles). The architecture is identical to JS; the
+  upgrade is the safety/typing.
+- File I/O callback pattern is **error-first**: `(err: NodeJS.ErrnoException | null, data: string) => ...`.
+  In modern TS you'd more likely use the **Promise** versions (`fs.promises.readFile` / `await`) which
+  wrap the same offloading with `async`/`await` — same threading model underneath.
+- Typed lifecycle sketch:
+  ```ts
+  import http, { IncomingMessage, ServerResponse } from "node:http";
+  import process from "node:process";
+
+  const server = http.createServer((req: IncomingMessage, res: ServerResponse) => {
+    res.end("hello");
+  });
+
+  server.listen(3000, () => {
+    console.log("listening — event loop now keeping process alive");
+  });
+
+  process.on("SIGINT", () => {
+    server.close(() => process.exit(0)); // graceful shutdown
+  });
+  ```
+- Non-blocking read vs blocking read (feel the difference):
+  ```ts
+  import fs from "node:fs";
+
+  // ✅ offloaded to libuv thread pool; callback runs on main thread later
+  fs.readFile("data.txt", "utf8", (err: NodeJS.ErrnoException | null, data: string) => {
+    if (err) { console.error(err); return; }
+  });
+
+  // ❌ readFileSync blocks the main thread → entire event loop freezes
+  // const data = fs.readFileSync("data.txt", "utf8");
+  ```
+
+## Notes & gotchas
+- The request listener is an event handler, not a function you call — control is inverted.
+- After your synchronous code finishes, the process lives **only** as long as pending events exist.
+- The request listener runs in the **Poll phase** of the event loop.
+- **Each callback runs synchronously on the main thread**; only scheduling is async. Long synchronous
+  work inside a callback blocks the whole loop.
+- Node is **single-threaded for your JS**, but the *process* is multi-threaded (main thread + libuv
+  pool + V8 threads).
+- Incoming network requests are handled by the OS kernel and dispatched to your main-thread listener;
+  only file/DNS/crypto work uses the libuv thread pool.
+- CPU-bound JS blocks everything → use `worker_threads` for heavy computation (advanced topic).
+- Tune the libuv pool via `UV_THREADPOOL_SIZE` env var if file/DNS work saturates the default 4.
+- `process.pid` / `process.uptime()` let you inspect the OS process from TS.
+- `server.close(cb)` removes the listening handle; once it's the last pending handle, the process exits.
+

@@ -598,3 +598,70 @@ res.end("chunk 3\n"); // still must end!
 - `res.writeHead` flushes headers immediately; `res.setHeader` buffers them until first write/end.
 - `res.write` returning `false` = backpressure (advanced) — still end the response once.
 
+---
+
+# Lecture 31: Request & Response Headers
+
+## What I learned
+- Lecture 31 formalizes **headers** — metadata key/value pairs that travel *alongside* the body in both
+  directions. Request headers are read via `req.headers`; response headers are set via `res.setHeader`
+  / `res.writeHead`. Headers carry metadata (content type, length, encoding, caching, auth, cookies) —
+  everything *about* the payload, not the payload itself.
+- **Request headers** — sent by the client (browser/curl) → you **read** them via `req.headers`.
+- **Response headers** — sent by your server → you **set** them via `res.setHeader` / `res.writeHead`.
+
+### Request headers (req.headers)
+- Typed `IncomingHttpHeaders`, read-only. Common ones: `Host`, `User-Agent`, `Accept`,
+  `Accept-Encoding`, `Content-Type`, `Content-Length`, `Authorization`, `Cookie`.
+- **Critical rule — Node lowercases header names.** At the HTTP protocol level headers are
+  **case-insensitive** (`Content-Type` ≡ `content-type`), and Node normalizes them to lowercase in
+  `req.headers`. Always read with lowercase keys: `req.headers["content-type"]`.
+  ```ts
+  const ua = req.headers["user-agent"];  // string | string[] | undefined
+  const ct = req.headers["content-type"];
+  const host = req.headers["host"];
+  ```
+
+### Response headers (setHeader / getHeader / removeHeader)
+- `setHeader` **buffers** the header until the first `write`/`end` (or `writeHead` flushes it).
+- `getHeader` / `hasHeader` / `removeHeader` inspect/alter headers you've set (before they're sent).
+  ```ts
+  res.setHeader("Content-Type", "text/html; charset=utf-8");
+  res.setHeader("Cache-Control", "no-store");
+  const ct = res.getHeader("Content-Type"); // number | string | string[] | undefined
+  res.hasHeader("Content-Type");             // boolean
+  res.removeHeader("Cache-Control");
+  res.end("<h1>مرحباً</h1>");
+  ```
+
+### Multiple values & arrays
+- A header name can repeat on the wire (e.g. `Set-Cookie`). Node collapses repeats into an **array**:
+  - request side: `req.headers["set-cookie"]` is `string[]` when repeated.
+  - response side: set multiple values explicitly — `res.setHeader("Set-Cookie", ["a=1", "b=2"])`.
+
+### The golden constraint (ties Lectures 29–30)
+- **Headers must be configured before the body is written.** The HTTP frame order is
+  `STATUS → HEADERS → BODY`. Once the first body byte leaves (`res.write`/`res.end`), the header block
+  is **locked**: `res.write("hi"); res.setHeader("Content-Type", "text/plain");` throws
+  `ERR_HTTP_HEADERS_SENT`. So: **set status + headers first → then write/end body.**
+
+## TypeScript mapping
+- **`req.headers` values are `string | string[] | undefined`** — guard before use:
+  ```ts
+  const ct = req.headers["content-type"];
+  if (typeof ct === "string") { /* single value */ }
+  ```
+- **`res.setHeader(name, value)` value type is `number | string | readonly string[]`** — no objects.
+- **`res.getHeader` returns `number | string | string[] | undefined`** — nullable, guard it.
+- Header **names are `string`**; read request headers in **lowercase** (Node lowercases them).
+- `req.rawHeaders: string[]` preserves original **case + order + duplicates** (use when that matters).
+
+## Notes & gotchas
+- Headers = the envelope; body = the letter. Request headers describe what the client sent; response
+  headers tell the client how to interpret what's coming.
+- Configure response headers **before** the body; HTTP treats header names case-insensitively, but
+  Node stores them lowercase.
+- After the first body byte, headers are locked → `ERR_HTTP_HEADERS_SENT` if you try to set them.
+- Repeated headers become arrays (`Set-Cookie`); set arrays to send multiple header lines.
+- Always null-check header values under strict TS (`string | string[] | undefined`).
+

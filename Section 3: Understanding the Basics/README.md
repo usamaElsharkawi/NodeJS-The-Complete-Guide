@@ -370,3 +370,57 @@ process.on("SIGTERM", () => shutdown("SIGTERM"));
 - Non-zero exit codes communicate failure to Docker/systemd/CI.
 - `uncaughtException` / `unhandledRejection` handlers prevent silent crashes in production.
 
+---
+
+# Concept: The Port ↔ Process Relationship
+
+> Supplementary note (pre-Lecture 29) clarifying how an OS port relates to a Node process.
+
+## What I learned
+- A **port** is a 16-bit number (0–65535) naming a specific **endpoint inside a host** (an IP
+  address). The OS identifies a connection by a 4-tuple:
+  `(source IP, source port, destination IP, destination port)`.
+- When a request hits the machine, the OS reads **(destination IP, destination port)** and asks
+  *"which process is listening on this?"*, then delivers the packet to **that process**. So the port
+  is the **address the OS uses to route incoming traffic to the right process**.
+- A **listening process** calls `bind()` + `listen()` (Node wraps this as `server.listen(3000)`),
+  telling the OS *"I own port 3000 on this IP."* The OS records the mapping **`(IP, port) → process`**
+  in its socket table; every packet to that port goes to that one process.
+
+### Key rules
+- **One listener per (IP, port, protocol) at a time.** Two processes can't both `listen()` on
+  `3000/TCP` — the second gets **`EADDRINUSE`**. This is the direct, enforceable link between "port"
+  and "process."
+- **One process can listen on many ports.** A single Node process can `server.listen(3000)` *and*
+  `server.listen(8080)` — multiple servers, multiple sockets, same process.
+- **Ports are per-protocol.** TCP port 3000 and UDP port 3000 are independent socket tables.
+- **Port 0 = let the OS pick.** `server.listen(0)` → OS chooses a free **ephemeral** port; the process
+  still owns whatever was assigned.
+- **Privileged ports (1–1023)** typically need root/admin (e.g. 80, 443) — why we use 3000/8080 in dev.
+- **Outgoing connections also get a port.** When *your* process makes a request, the OS assigns a random
+  **source** port from the ephemeral range (49152–65535) — so the process is a *listener* on one port
+  and a *client* on another simultaneously.
+
+### Why EADDRINUSE proves the link
+- A second `server.listen(3000)` in the same (or another) process emits `'error'` → `EADDRINUSE`,
+  because port 3000 is already bound to a listening socket owned by a process — there can be only one owner.
+
+## TypeScript mapping
+- `server.listen(port: number, cb?)` — the `port` is the OS-level binding; TS types it as `number`.
+- `EADDRINUSE` surfaces as `err.code === "EADDRINUSE"` where `err: NodeJS.ErrnoException`.
+- `server.address()` returns `AddressInfo | string | null` → `AddressInfo.port` is the *actual* bound
+  port (essential after `listen(0)`).
+- Multiple servers in one process:
+  ```ts
+  const s1 = http.createServer((_q, r) => r.end("one")).listen(3000);
+  const s2 = http.createServer((_q, r) => r.end("two")).listen(8080);
+  // one process, two ports, two sockets
+  ```
+
+## Notes & gotchas
+- **Process ↔ port is 1-to-many ownership:** a process may own many ports; a port (per IP+protocol) is
+  owned by exactly one process. The OS is the bookkeeper; `server.listen(port)` claims the entry.
+- `EADDRINUSE` = the port is already owned by a listening socket — change port or free the old process.
+- `listen(0)` → OS-assigned ephemeral port; always read `server.address()` to learn which one.
+- Privileged ports (<1024) usually require elevated permissions.
+

@@ -282,3 +282,91 @@ npm start         # node app.ts   (or: node --watch app.ts for auto-restart)
 - `process.pid` / `process.uptime()` let you inspect the OS process from TS.
 - `server.close(cb)` removes the listening handle; once it's the last pending handle, the process exits.
 
+---
+
+# Lecture 28: Controlling the Node.js Process
+
+## What I learned
+- The simplest way to quit a running Node server is **`CTRL+C`** in the terminal where you started it
+  (where you ran `node app.ts`). That is the user-facing tip; the deeper idea is **OS signals control
+  the process lifecycle**.
+- `CTRL+C` does **not** kill the window — it sends the **`SIGINT`** signal (SIGnal INTerrupt) to the
+  **foreground process group** in that terminal. The Node process receives it and, by default,
+  **terminates immediately**. This ties back to Lecture 27: the process was alive because of pending
+  events (the listening socket); `SIGINT` stops it regardless.
+
+### The signal family
+- `SIGINT` — sent by `CTRL+C` in the terminal. Default: terminate.
+- `SIGTERM` — sent by `kill <pid>` (the conventional *graceful* stop). Default: terminate.
+- `SIGHUP` — sent when the terminal/session is closed. Default: terminate.
+- `SIGKILL` — sent by `kill -9 <pid>`. **Forced** — cannot be caught or ignored.
+- `SIGUSR1` — sent by `kill -USR1 <pid>`. Starts the debugger.
+- `SIGKILL` and `SIGSTOP` are the only signals a process **cannot intercept** — important when a
+  server is truly hung and won't respond to anything else.
+
+### Handling signals (graceful shutdown)
+- You can **intercept** `SIGINT`/`SIGTERM` to shut down gracefully: stop accepting new requests,
+  finish in-flight ones, then exit. This is the real-world reason Lecture 28 exists.
+- `server.close(cb)` stops accepting *new* connections but lets *existing* requests finish — that is
+  "graceful" vs the hard cut of default `SIGINT`.
+- A safety net (e.g. `setTimeout(...).unref()`) force-exits if in-flight connections hang too long.
+
+### process.exit() and exit codes
+- `process.exit(0)` → success (clean). Any non-zero code (e.g. `1`) → error. Exit codes are read by
+  tooling/orchestrators (Docker, systemd, CI).
+- You rarely call `process.exit()` directly — normally the event loop draining (no pending events)
+  exits with `0` on its own. Calling it **mid-code** skips pending callbacks and can truncate
+  logs/responses.
+- `process.on("exit", (code) => {...})` runs **synchronously** on exit — no async I/O can complete
+  here (callbacks like `fs.writeFile` won't fire). Use only for last-moment sync cleanup.
+- `process.on("beforeExit", ...)` fires when the loop is about to drain **but before** exit — async is
+  allowed here (you can even add new work to keep the process alive).
+
+### Crash vs clean exit (error signals)
+- By default an **uncaught exception** crashes the process (exit code 1). In production you often add
+  handlers to log + shut down cleanly instead of dying silently:
+  - `process.on("uncaughtException", (err: Error) => {...; process.exit(1);})`
+  - `process.on("unhandledRejection", (reason: unknown) => {...; process.exit(1);})`
+
+## TypeScript mapping
+- `import process from "node:process"` → typed as `NodeJS.Process`.
+- Signal handlers: `process.on("SIGINT", () => void)` — the signal name is a string-literal union
+  `NodeJS.Signals`, so TS validates the signal name.
+- Exit: `process.exit(code: number)`. Exit-code parameter in handlers: `process.on("exit", (code: number) => void)`.
+- Inspect the OS process: `process.pid`, `process.uptime()`.
+- The architecture is identical to JS; TS adds safety by typing the process surface and signal names.
+
+### Typed graceful-shutdown sketch
+```ts
+import http, { IncomingMessage, ServerResponse } from "node:http";
+
+const server = http.createServer((req: IncomingMessage, res: ServerResponse) => {
+  res.end("hello");
+});
+
+server.listen(3000, () => console.log("listening on 3000"));
+
+function shutdown(signal: string): void {
+  console.log(`\nReceived ${signal} — shutting down gracefully...`);
+  server.close(() => {
+    console.log("All connections closed. Exiting.");
+    process.exit(0);
+  });
+  // safety net: force-exit if connections hang too long
+  setTimeout(() => process.exit(1), 10_000).unref();
+}
+
+process.on("SIGINT", () => shutdown("SIGINT"));
+process.on("SIGTERM", () => shutdown("SIGTERM"));
+```
+
+## Notes & gotchas
+- `CTRL+C` = `SIGINT` to the foreground process group → default immediate termination.
+- `SIGKILL` (`kill -9`) cannot be caught — last resort for a hung process.
+- Catch `SIGINT`/`SIGTERM` to implement **graceful shutdown** with `server.close(cb)`.
+- `server.close()` stops *new* connections but lets *existing* ones finish.
+- Avoid calling `process.exit()` mid-code — it skips pending callbacks and can truncate output.
+- `process.on("exit", ...)` is **sync-only**; use `beforeExit` for async cleanup.
+- Non-zero exit codes communicate failure to Docker/systemd/CI.
+- `uncaughtException` / `unhandledRejection` handlers prevent silent crashes in production.
+

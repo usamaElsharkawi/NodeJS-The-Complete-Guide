@@ -1031,3 +1031,133 @@ req.on("end", () => {
 - `req` Readable / `res` Writable; `'data'` = chunk, `'end'` = done, `'error'` = failed.
 - A single chunk *can* be the whole body for small payloads, but you can't rely on it — always gather.
 
+---
+
+# Lecture 35: Understanding Event Driven Code Execution
+
+## What I learned
+- Lecture 35 makes the event-driven idea from Lecture 27 **concrete at the code level**: it shows
+  *when* your functions actually run. The big realization — functions you define don't run where you
+  write them; they run **when their event fires**.
+- In a linear script, code runs top-to-bottom in written order. In Node's event-driven model:
+  1. Your **top-level code runs once**, synchronously (define handlers, `server.listen`, bottom logs).
+  2. After that, **nothing else runs unless an event fires.** Each event (request, timer, I/O) triggers
+     a **callback you previously registered**.
+  3. The event loop is the dispatcher — it waits for events and calls the matching callback.
+- So execution order is **driven by events, not by source order.**
+
+### The execution-order demo
+```ts
+import http, { IncomingMessage, ServerResponse } from "node:http";
+
+console.log("1: top-level starts");
+
+const server = http.createServer((req: IncomingMessage, res: ServerResponse) => {
+  console.log("3: a request arrived — listener runs NOW"); // runs LATER, per request
+  res.end("ok");
+});
+
+server.listen(3000, () => {
+  console.log("2: server listening — callback runs after sync code");
+});
+
+console.log("4: top-level ends");
+setTimeout(() => console.log("5: timer fired"), 0);
+```
+- Output (before any request): `1, 4, 2, 5`. Then on a request: `3`.
+- `1`/`4` are synchronous top-level → immediate. `2` is the `listen` callback → after sync code. `5` is a
+  timer → on the loop. `3` only runs **when a request event arrives** — maybe minutes later, maybe never.
+  The listener's position in the file is irrelevant; its *event* is what matters.
+
+### Key implications
+- **The listener has no "caller" to return to.** You can't `return` a value from the request listener —
+  there's no calling function waiting. You communicate *out* by writing to `res`. (Control inversion,
+  Lecture 27.)
+- **Code runs later, off the main synchronous path** — inside the listener it executes during a loop
+  iteration triggered by an event, not during initial file execution.
+- **Shared module-level state is shared across all requests.** A `let count = 0` incremented in the
+  listener is a global request counter — every request sees the mutated value. Easy to misuse if you
+  assume per-request isolation.
+- **Order is non-deterministic across events.** Two requests may interleave; don't assume request A
+  finishes before request B starts (blocking would be required for that — bad, Lectures 36/37).
+
+## TypeScript mapping
+- The request listener is `(req: IncomingMessage, res: ServerResponse) => void` — a value passed to
+  `createServer`. TS types its args; the *runtime* decides when to call it.
+- `server.listen(port, cb)` and `setTimeout(fn, ms)` equally register loop-invoked callbacks.
+- Listeners are `void` callbacks with no caller → no return-type contract; TS models this as `=> void`.
+- Event registrations (`process.on`, `req.on`) are typed against `NodeJS` event maps → dispatch stays
+  type-safe.
+
+## Notes & gotchas
+- Two zones: **(A) setup** runs once, top-to-bottom, synchronously; **(B) callbacks** registered in A,
+  executed later by the loop *only when their event fires*. File order ≠ execution order; the **event**
+  decides.
+- No return value from listeners — write to `res` instead.
+- Module-level variables are cross-request shared state — treat them as global.
+
+---
+
+# Concept: Event Loop Phases, Microtasks & process.nextTick (browser vs Node)
+
+> Supplementary note: the learner knew the browser's microtask/macrotask model and asked whether Node
+> has the same prioritization or alternatives.
+
+## What I learned
+- The **browser model**: one **macrotask queue** + one **microtask queue**. After each macrotask, the
+  microtask queue **drains fully** before the next macrotask. Microtasks (`Promise.then`,
+  `queueMicrotask`) always beat macrotasks (`setTimeout`, I/O, `rAF`). Priority: microtasks > macrotasks.
+- **Node keeps microtasks > macrotasks, but the macrotask side is split into multiple FIFO queues
+  called _phases_** rather than one queue:
+  ```text
+  Timers ──────── setTimeout / setInterval
+  Pending ─────── deferred I/O callbacks
+  Poll ────────── I/O callbacks (incl. our request listener!), fs
+  Check ──────── setImmediate
+  Close ──────── 'close' handlers
+  ```
+  Each phase has its own queue; the loop visits phases in order, drains the current phase's queue, then
+  moves on.
+- **Full priority order** after the current synchronous operation:
+  1. Current synchronous code
+  2. `process.nextTick` queue (drains fully, before everything else)
+  3. Promise microtasks (`Promise.then`, `queueMicrotask`) — drain fully
+  4. Event loop **phases** (macrotasks): Timers → Pending → Poll → Check → Close
+- So microtasks still beat macrotasks (like the browser), and Node adds **`process.nextTick`** as an
+  *even higher* priority than promises.
+
+### Live demo
+```ts
+import process from "node:process";
+
+console.log("sync 1");
+setTimeout(() => console.log("timeout (Timers phase)"), 0);
+setImmediate(() => console.log("setImmediate (Check phase)"));
+Promise.resolve().then(() => console.log("promise.then (microtask)"));
+queueMicrotask(() => console.log("queueMicrotask (microtask)"));
+process.nextTick(() => console.log("nextTick (nextTick queue)"));
+console.log("sync 2");
+```
+- Output: `sync 1, sync 2, nextTick, promise.then, queueMicrotask, timeout, setImmediate`.
+- `nextTick` beats promises; both beat phases. At top level, **Timers phase runs before Check phase**, so
+  `setTimeout(0)` beats `setImmediate`. Inside an I/O callback the opposite holds (Poll → Check), so
+  `setImmediate` wins there.
+
+## TypeScript mapping
+- `process.nextTick(fn)` — typed `(callback: (...args: any[]) => void, ...args: any[]) => void`
+  (the `any[]` is Node's API, not your code — safe to call).
+- `setImmediate(fn)` returns `NodeJS.Immediate`; clear with `clearImmediate`.
+- `queueMicrotask(fn)` and `Promise` are globals.
+- Same `NodeJS.*` / `Buffer` typing as before.
+
+## Notes & gotchas
+- **`process.nextTick` can starve the loop.** A recursive `nextTick` runs *before every phase*, so it can
+  block I/O forever — the loop never reaches Poll. Use sparingly.
+- **`setImmediate` ≠ `setTimeout(0)`.** Different phases; relative order depends on *where* you schedule
+  them (top-level vs inside I/O).
+- **`await` in an `async` listener** schedules a microtask — code after `await` runs after the current
+  phase's microtasks.
+- Don't block the loop (Lectures 36/37) — a long sync task between phases delays all later phases.
+- Bottom line: Node keeps browser's microtasks > macrotasks rule, but replaces the single macrotask
+  queue with **phased queues**, and inserts **`process.nextTick`** as the highest-priority callback type.
+

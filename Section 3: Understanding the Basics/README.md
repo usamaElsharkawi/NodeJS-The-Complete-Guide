@@ -665,3 +665,77 @@ res.end("chunk 3\n"); // still must end!
 - Repeated headers become arrays (`Set-Cookie`); set arrays to send multiple header lines.
 - Always null-check header values under strict TS (`string | string[] | undefined`).
 
+---
+
+# Lecture 32: Routing Requests
+
+## What I learned
+- Lecture 32 introduces **routing** — inspecting the incoming request and deciding *what* to send back
+  based on its **URL path** and **method**. Up to now every request got the same response; routing makes
+  the server actually useful.
+- Routing = branching the request listener on request metadata: **path** (`req.url` →
+  `new URL(...).pathname`) → *what resource*; **method** (`req.method`) → *what action* (GET = read,
+  POST = create, …).
+
+### The basic router
+```ts
+import http, { IncomingMessage, ServerResponse } from "node:http";
+
+const server = http.createServer((req: IncomingMessage, res: ServerResponse) => {
+  const url = new URL(req.url ?? "", "http://localhost");
+  const pathname = url.pathname;
+
+  if (pathname === "/") {
+    res.setHeader("Content-Type", "text/html; charset=utf-8");
+    res.end("<h1>Home</h1>");
+  } else if (pathname === "/users") {
+    res.setHeader("Content-Type", "text/html; charset=utf-8");
+    res.end("<h1>Users</h1>");
+  } else if (pathname === "/products") {
+    res.setHeader("Content-Type", "text/html; charset=utf-8");
+    res.end("<h1>Products</h1>");
+  } else {
+    res.statusCode = 404;
+    res.setHeader("Content-Type", "text/html; charset=utf-8");
+    res.end("<h1>404 - Not Found</h1>");
+  }
+});
+server.listen(3000);
+```
+
+### Key points
+- **Use `pathname`, not `req.url`.** `req.url` includes the query string (`/users?page=2`), so an exact
+  `=== "/users"` check would fail. `new URL(...).pathname` strips the query → clean routing key.
+- **Always end the response in every branch**, including the `404` default. A branch without `res.end()`
+  = silent **hang** (Lecture 26 checklist item).
+- **Default/404 branch is mandatory.** Without it, unknown paths fall through with no response sent.
+- **Method-aware routing** (preview of POST in Lecture 34):
+  `if (pathname === "/users" && req.method === "POST") { /* create user */ }`.
+- A `switch (pathname)` reads cleanly for many routes; the `default:` case is your 404.
+
+### Sending different content types per route
+```ts
+if (pathname === "/api/users") {
+  res.setHeader("Content-Type", "application/json");
+  res.end(JSON.stringify([{ id: 1, name: "Ada" }]));
+}
+```
+- This is where Lecture 31's `Content-Type` matters: the client renders JSON vs HTML based on the
+  header you set.
+
+## TypeScript mapping
+- **Null-safety from Lecture 29:** `req.url` and `req.method` are `string | undefined` — always
+  `req.url ?? ""` and `req.method ?? "GET"` before comparing.
+- **`pathname` is `string`** (from `URL`) — safe to compare directly.
+- **Set `res.statusCode = 404`** (a `number`) for the not-found branch — TS validates the type.
+- Every branch must call `res.end(body)` exactly once — TS won't catch a missing `end` (runtime), so it
+  is manual checklist discipline, not a type error.
+- Use strict `===` (TS `strict` + style) — pathnames are strings, no coercion needed.
+
+## Notes & gotchas
+- Routing = read `pathname` (+ `method`) → pick a branch → set `Content-Type`/`statusCode` → `res.end()`
+  exactly once. Unknown paths must hit a `404` default.
+- Parse with `new URL`, never match on raw `req.url` (it carries the query string).
+- Method + path together define a route (GET `/users` vs POST `/users` differ).
+- No framework yet — this is raw `if`/`switch` routing; later tooling (Express) abstracts it.
+

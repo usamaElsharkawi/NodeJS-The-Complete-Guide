@@ -1250,3 +1250,73 @@ console.log("this runs immediately, before the write completes");
 - **Mental model:** Blocking = the thread waits (frozen). Non-blocking = the thread delegates and
   continues. `writeSync` freezes your server; `write`/`writeFile` (or `fs/promises`) let the loop breathe.
 
+---
+
+# Lecture 37: Node.js - Looking Behind the Scenes
+
+## What I learned
+- Lecture 37 is the deep dive into **how Node.js works internally**, synthesizing the event loop
+  (27/35), the libuv thread pool + OS threads (OS discussion), and blocking vs non-blocking (36) into
+  one architecture picture.
+
+### The layers of Node.js
+```text
+┌─────────────────────────────┐
+│   Your JavaScript / TS       │   (V8 executes this, single call stack)
+├─────────────────────────────┤
+│   Node.js JS APIs            │   fs, http, process, Buffer … (the modules we import)
+├─────────────────────────────┤
+│   C++ Bindings               │   bridge JS <-> native code
+├──────────────┬──────────────┤
+│   V8         │   libuv       │   V8 = JS engine; libuv = event loop + async I/O + thread pool
+├──────────────┴──────────────┤
+│   Other C/C++ libs           │   c-ares (DNS), OpenSSL (crypto/tls), zlib, llhttp (HTTP)
+├─────────────────────────────┤
+│   Operating System           │   kernel: epoll/kqueue/IOCP, network stack, filesystem
+└─────────────────────────────┘
+```
+- **V8 (Google):** the JS engine. Compiles/runs your JS (JIT), owns the heap and call stack. JS executes
+  **single-threaded** here.
+- **libuv (Node's authors):** cross-platform library providing the **event loop**, the **thread pool**,
+  and async I/O. This is the "behind the scenes" engine we keep meeting.
+- **C++ bindings:** the thin bridge letting JS calls reach V8/libuv/native libs.
+- **Other native libs:** `c-ares` (DNS), `OpenSSL` (crypto/TLS), `zlib` (compression), `llhttp` (HTTP
+  parsing) — each handles a specialized job off the main thread.
+
+### The journey of an async call (ties Lecture 36)
+- `fs.readFile("x.txt", cb)` → C++ binding → libuv delegates the read to a **THREAD-POOL worker** → OS
+  reads the file → when done, libuv **queues cb on the event loop** → Poll phase → your cb runs on the
+  **MAIN thread**. The JS thread was free the whole time — the non-blocking magic from Lecture 36. Only
+  the *tiny* callback returns to the main thread.
+- For **network I/O** (HTTP), the heavy part goes straight to the **OS kernel** (epoll/kqueue), not the
+  thread pool — the kernel notifies libuv when data is ready, and the loop dispatches your listener in
+  the **Poll phase** (where our request handler fires — Lectures 26/35).
+
+### Why Node scales (the synthesis)
+- JS runs on **one** main thread (V8), but **concurrency** comes from libuv + the OS doing I/O in
+  parallel (thread pool for file/DNS/crypto; kernel for network).
+- The event loop serializes *completion callbacks* back onto the single main thread — so code stays
+  simple (no manual thread management) while I/O happens concurrently underneath.
+- This is the "Node is single-threaded *for JS*, but the process is multi-threaded" point from the OS
+  discussion — now we see *which* threads (libuv pool + V8 internal + others).
+
+## TypeScript mapping
+- **No new TS surface** here — this lecture is internals — but it explains *why* existing types behave:
+  - `node:fs`, `node:http`, `node:process` are the **JS API layer**; underneath sits the C++ binding →
+    libuv. `import fs from "node:fs"` ultimately routes through this stack.
+  - The async callbacks we type (`(err: NodeJS.ErrnoException | null, …) => void`) are the functions
+    libuv **queues on the loop** and V8 later executes on the main thread.
+  - `NodeJS.Process`, `Buffer`, `fs`, etc. are the typed façade over native machinery.
+- App code should never touch `process.binding` / internal C++ hooks — undocumented internals.
+
+## Notes & gotchas
+- Node = **V8** (runs JS on one thread) + **libuv** (event loop + thread pool + async I/O) + native libs,
+  bridged by **C++ bindings**, on the **OS**. Async calls dive through these layers; slow work happens
+  off your thread; only the callback resurfaces on the main thread via the loop.
+- File/DNS/crypto I/O → libuv **thread pool**; network I/O → **OS kernel** (not the pool).
+- "Single-threaded Node" = single-threaded **JS execution** (V8); the *process* is multi-threaded.
+- V8 JIT-compiles JS to machine code; it also owns GC (one of the V8 internal threads).
+- Connections table: Lecture 27/35 → libuv's loop runs our callbacks on V8's main thread; Lecture 35
+  phases → libuv's Timers→Pending→Poll→Check→Close; OS discussion → libuv pool + V8 threads + kernel;
+  Lecture 36 → `writeSync` blocks V8's thread, `write` delegates to libuv/OS.
+

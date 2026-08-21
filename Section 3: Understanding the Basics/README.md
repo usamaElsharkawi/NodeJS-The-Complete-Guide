@@ -1320,3 +1320,107 @@ console.log("this runs immediately, before the write completes");
   phases → libuv's Timers→Pending→Poll→Check→Close; OS discussion → libuv pool + V8 threads + kernel;
   Lecture 36 → `writeSync` blocks V8's thread, `write` delegates to libuv/OS.
 
+---
+
+# Lecture 38: Using the Node Modules System
+
+## What I learned
+- Lecture 38 is about **Node's module system** — splitting the program across multiple files and wiring
+  them with imports/exports. The instructor's concrete move: take the `if/else` **routing logic** built
+  in Lectures 32–34 and put it in a **separate file**, then import it into `app.ts`.
+- A **module** = one file that **exports** functionality and **imports** what it needs. Instead of one
+  giant `app.ts`, code is organized into focused files; our routing logic becomes its own module.
+
+### ESM vs the course's `require` (critical mapping)
+- Max's older recordings use **CommonJS**: `const x = require("./routes")` + `module.exports = ...`,
+  no file extension. **Our toolchain forbids this.**
+- With `"type": "module"` + NodeNext we use **ESM**: `import { routeRequest } from "./routes.ts"`.
+  - **No `require`** — doesn't exist in ESM (avoid `createRequire` too).
+  - **No `module.exports`** — use `export`.
+  - **`.ts` extension is mandatory** in relative imports (NodeNext/ESM rule + our skill notes); Node 24
+    strips types and resolves `./routes.ts` natively.
+
+### The refactor: routing → routes.ts
+```ts
+// routes.ts (the extracted module)
+import type { IncomingMessage, ServerResponse } from "node:http";
+
+export async function routeRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const url = new URL(req.url ?? "", "http://localhost");
+  const pathname = url.pathname;
+  if (req.method === "GET" && pathname === "/") {
+    res.setHeader("Content-Type", "text/html; charset=utf-8");
+    res.end("<h1>Home</h1>");
+    return;
+  }
+  // ... body parsing (Lecture 34) for POST /users ...
+  res.statusCode = 404;
+  res.end("Not found");
+}
+```
+```ts
+// app.ts (thin wiring)
+import http from "node:http";
+import type { IncomingMessage, ServerResponse } from "node:http";
+import { routeRequest } from "./routes.ts";
+
+const server = http.createServer((req: IncomingMessage, res: ServerResponse) => {
+  void routeRequest(req, res);
+});
+server.listen(3000, () => console.log("Server on http://localhost:3000"));
+```
+- `app.ts` stays thin (server setup); `routes.ts` owns the logic. Clean separation, one-way dependency
+  (`app → routes`, never the reverse).
+
+## TypeScript mapping
+- **`.ts` extension required** on relative imports: `from "./routes.ts"`. Omitting → resolve error.
+- **`import type` for type-only imports** (verbatimModuleSyntax): `import type { IncomingMessage, … }`;
+  `http` stays a value import.
+- **Named exports** (`export function routeRequest`) are cleaner than default for multi-piece modules.
+- **No `require` / `module.exports`** — ESM only (explicit skill-note rule).
+- **No enums / const enums / parameter properties** in any module (erasableSyntaxOnly).
+- **Native TS:** `node app.ts` runs both files; types stripped at load. `tsc --noEmit` follows the `.ts`
+  imports and type-checks across modules.
+- **`allowImportingTsExtensions: true`** in tsconfig is required so `tsc` accepts `./routes.ts` imports
+  (Node 24 resolves them natively at runtime).
+- **Circular imports** (A↔B) can yield `undefined` at load — keep the dependency direction one-way.
+
+## Notes & gotchas
+- A module is a file that **exports** behavior and **imports** dependencies. ESM = `export` / `import`
+  with explicit `.ts` extensions; the course's `require`/`module.exports` is CommonJS and is **not** our
+  approach.
+- Splitting routing into `routes.ts` keeps `app.ts` as thin setup wiring.
+- We also created **`routes.ts`** alongside `app.ts` for this lecture (verified: `npm run lint` clean,
+  server boots, `GET /`, `POST /users` JSON + form return 201, unknown path returns 404).
+
+---
+
+# Section 3 Wrap-Up (Lectures 25–38)
+
+> Core content lectures of "Understanding the Basics" are complete and documented. Remaining items in the
+> course (Lecture 39 "Wrap Up", Lecture 40 "Useful Resources & Links", Assignment 1 "Time to Practice")
+> are summary/resource/practice items, covered separately if desired.
+
+## What we built, lecture by lecture
+- **25** How The Web Works — request/response, HTTP/HTTPS, `IncomingMessage`/`ServerResponse`.
+- **26** Request Listener — `createServer`, `req`/`res`, `res.end()`, `listen()`, `EADDRINUSE`.
+- **27** Lifecycle & Event Loop — event-driven, process lifecycle, loop phases, OS threads.
+- **28** Controlling the Process — `CTRL+C`/`SIGINT`, signals, graceful shutdown, `process.exit`.
+- **29** Understanding Requests — `req` properties, body stream, `URL` parsing.
+- **30** Sending Responses — `res` Writable, `end`/`write`/`setHeader`, `Content-Type`.
+- **31** Request & Response Headers — header rules, lowercased names, `ERR_HTTP_HEADERS_SENT`.
+- **32** Routing Requests — `pathname` + `method`, 404 default.
+- **33** Redirecting Requests — `301`/`302` + `Location`, two-request flow.
+- **34** Parsing Request Bodies — `Buffer` collection, `JSON.parse`/`URLSearchParams`, Streams & Buffers.
+- **35** Event Driven Code Execution — callbacks run on events, nextTick/phases.
+- **36** Blocking vs Non-Blocking — `fs.writeSync` vs `fs.write`/`fs/promises`.
+- **37** Behind the Scenes — V8 + libuv + bindings + native libs + OS.
+- **38** Node Modules System — ESM, split routing into `routes.ts`, `.ts` extensions.
+
+## Toolchain confirmed across the section
+- Native TypeScript on Node 24: `node app.ts` (type-stripping) + `tsc --noEmit` (type-check).
+- `package.json` `"type": "module"`; tsconfig `module: NodeNext`, `strict`, `erasableSyntaxOnly`,
+  `verbatimModuleSyntax`, `allowImportingTsExtensions`.
+- Hard rules enforced: `import` not `require`; `.ts` extensions on relative imports; `import type` for
+  types; no `enum`/`const enum`/parameter properties; every response path calls `res.end()`.
+

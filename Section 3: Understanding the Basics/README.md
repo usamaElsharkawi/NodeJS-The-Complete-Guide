@@ -750,12 +750,18 @@ if (pathname === "/api/users") {
 - A redirect handler just points the way; it does **not** serve the new content itself.
 
 ### How a redirect works
-```mermaid
-flowchart LR
-    B[Browser] -->|GET /old| S[Server]
-    S -->|301/302 + Location: /new| B
-    B -->|GET /new (automatic)| S
-    S -->|200 + content| B
+```text
+ Browser                Server
+   │                      │
+   │── GET /old ────────▶│
+   │                      │  (sets statusCode = 302,
+   │                      │   Location: "/new")
+   │◀── 302 + Loc ────────│
+   │                      │
+   │── GET /new ────────▶│  (browser auto-follows Location)
+   │                      │
+   │◀── 200 + HTML ───────│
+   ▼                      ▼
 ```
 - The server replies with a **3xx status** + `Location` header. The browser reads it, issues a *new*
   request to `Location`, and your server serves that route normally. So **two requests happen**.

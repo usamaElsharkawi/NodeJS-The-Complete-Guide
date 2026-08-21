@@ -825,3 +825,209 @@ server.listen(3000);
 - Always `return` after a redirect/`end` to prevent double-writing the response.
 - Use `new URL(req.url ?? "", base).pathname` for matching (query string stripped), consistent with Lecture 32.
 
+---
+
+# Lecture 34: Parsing Request Bodies
+
+## What I learned
+- Lecture 34 combines Lectures 29 (reading the body stream), 32/33 (routing + methods): handling
+  **`POST`** requests by **parsing the request body** into usable data (JSON or form fields).
+- `GET` requests carry no body. But `POST`/`PUT` (the "create/update" verbs) send a **payload** — and
+  as learned in Lecture 29, that payload arrives as a **stream** (`req.on("data")` / `req.on("end")`),
+  never as a ready `req.body`. Lecture 34 is about **collecting that stream and parsing it into a real
+  object**.
+
+### Step 1: Collect the body (from Lecture 29)
+```ts
+const chunks: Buffer[] = [];
+req.on("data", (chunk: Buffer) => chunks.push(chunk));
+req.on("end", () => {
+  const body = Buffer.concat(chunks).toString(); // raw string payload
+  // parse `body` based on its Content-Type ...
+});
+```
+
+### Step 2: Parse based on Content-Type
+- The `Content-Type` request header tells you the format:
+
+| `Content-Type` | How to parse |
+|---|---|
+| `application/json` | `JSON.parse(body)` |
+| `application/x-www-form-urlencoded` | `new URLSearchParams(body)` |
+
+```ts
+import http from "node:http";
+import type { IncomingMessage, ServerResponse } from "node:http";
+
+interface UserInput {
+  name: string;
+  email: string;
+}
+
+function parseUser(raw: unknown): UserInput | null {
+  if (typeof raw !== "object" || raw === null) return null;
+  const r = raw as Record<string, unknown>;
+  if (typeof r.name !== "string" || typeof r.email !== "string") return null;
+  return { name: r.name, email: r.email };
+}
+
+function readBody(req: IncomingMessage): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    req.on("data", (chunk: Buffer) => chunks.push(chunk));
+    req.on("end", () => resolve(Buffer.concat(chunks).toString("utf-8")));
+    req.on("error", (err: Error) => reject(err));
+  });
+}
+
+const server = http.createServer(async (req: IncomingMessage, res: ServerResponse) => {
+  const url = new URL(req.url ?? "", "http://localhost");
+  const pathname = url.pathname;
+
+  if (req.method === "GET" && pathname === "/") {
+    res.setHeader("Content-Type", "text/html; charset=utf-8");
+    res.end(`<form method="POST" action="/users" enctype="application/x-www-form-urlencoded">
+      <input name="name" placeholder="name" />
+      <input name="email" placeholder="email" />
+      <button>Send</button>
+    </form>`);
+    return;
+  }
+
+  if (req.method === "POST" && pathname === "/users") {
+    try {
+      const raw = await readBody(req);
+      const ct = req.headers["content-type"];
+
+      let user: UserInput | null = null;
+      if (ct === "application/json") {
+        user = parseUser(JSON.parse(raw));
+      } else if (ct === "application/x-www-form-urlencoded") {
+        const p = new URLSearchParams(raw);
+        user = parseUser({ name: p.get("name"), email: p.get("email") });
+      }
+
+      if (!user) {
+        res.statusCode = 400;
+        res.setHeader("Content-Type", "text/plain; charset=utf-8");
+        res.end("Invalid input");
+        return;
+      }
+
+      res.statusCode = 201;
+      res.setHeader("Content-Type", "application/json; charset=utf-8");
+      res.end(JSON.stringify({ ok: true, user }));
+    } catch {
+      res.statusCode = 400;
+      res.setHeader("Content-Type", "text/plain; charset=utf-8");
+      res.end("Invalid body");
+    }
+    return;
+  }
+
+  res.statusCode = 404;
+  res.setHeader("Content-Type", "text/plain; charset=utf-8");
+  res.end("Not found");
+});
+server.listen(3000, () => console.log("Server on http://localhost:3000"));
+```
+
+### The Post/Redirect/Get tie-in (from Lecture 33)
+- A classic real flow: a form `POST`s, the server **parses the body**, then **redirects** (`302` +
+  `Location`) so a refresh doesn't resubmit. That's why Lectures 33 + 34 go together.
+
+## TypeScript mapping
+- **`JSON.parse` returns `any`** by design — which violates our checklist rule **"No `any`."** Fix by
+  casting to a **typed shape**: `JSON.parse(raw) as CreateUser`. Better, validate at runtime (client
+  data is untrusted) via a `parseUser(raw: unknown): UserInput | null` guard.
+- **`Content-Type` is `string | string[] | undefined`** (Lecture 31) — compare with `===` against the
+  exact string; guard with `typeof` first.
+- **`JSON.parse` throws on invalid/empty input** — always wrap in `try/catch` (returns `400`).
+- **`new URLSearchParams(raw)`** is fully typed; `.get(key)` returns `string | null` → default with `?? ""`.
+- **Empty body:** `POST` with no body still fires `end` with no `data` chunks → `raw === ""` →
+  `JSON.parse("")` throws → caught as `400`.
+- **`req.method` is `string | undefined`** — check `req.method === "POST"` (Lecture 29 null-safety).
+- **Always `return` after wiring the stream** so you don't fall through and double-`end`.
+- `import type { IncomingMessage, ServerResponse } from "node:http"` (verbatimModuleSyntax requires
+  type-only imports; `http` stays a value import).
+
+## Notes & gotchas
+- Read the body stream → get a raw string → **parse by `Content-Type`** (`JSON.parse` / `URLSearchParams`)
+  → **type/validate** it (never trust `any`) → respond. Wrap parsing in `try/catch` for malformed input.
+- `415 Unsupported Media Type` is the right status for an unknown `Content-Type`.
+- `400` for malformed/invalid bodies (bad JSON, missing fields). `201` for successful creation.
+- The body only exists on `POST`/`PUT`/etc., never on `GET`.
+- A framework (Express/Fastify) does this same gather-then-parse underneath; we do it at the raw layer.
+
+---
+
+# Concept: Streams & Buffers (the mechanics under Lecture 34)
+
+> Supplementary note deepening *how* a request body becomes usable data.
+
+## What I learned
+- A **`Buffer`** is Node's way of holding **binary data** (a sequence of bytes). Network data arrives as
+  bytes, not strings or objects. So when a request body streams in, each `data` chunk is a `Buffer` —
+  raw bytes waiting to be interpreted.
+- A **stream** is an interface for handling data **sequentially, in pieces**, without loading everything
+  into memory at once. `req` is a **Readable** stream (body flows in); `res` is a **Writable** stream
+  (response flows out).
+
+### Buffer — raw bytes
+- To turn bytes → text, **decode** with an encoding: `chunk.toString("utf-8")` (utf-8 is the default).
+- The encoding matters: Arabic/emoji are multi-byte in utf-8, so you must decode the *whole* body
+  together — never `toString()` a partial chunk mid-character (you'll corrupt a multibyte char). That's
+  why we collect **all** chunks first, then `Buffer.concat(chunks).toString()` once.
+- `Buffer.concat(chunks)` merges an array of `Buffer`s into one — safe because concatenation happens at
+  the byte level, before decoding.
+
+### Stream — data over time
+- **Chunks arrive over time.** A small body may be one `data` event; a large one many. You never know in
+  advance — so you must accumulate until `'end'`.
+- **`'end'` = stream finished** — only then is the full body available to parse.
+- **`'error'` = stream broke** (bad encoding, aborted connection) — handle it or the process can crash.
+
+### Why we collected into an array (Lecture 34 recap)
+```ts
+const chunks: Buffer[] = [];
+req.on("data", (c: Buffer) => chunks.push(c));
+req.on("end", () => {
+  const body = Buffer.concat(chunks).toString(); // decode the FULL byte sequence at once
+  const data = JSON.parse(body);
+});
+```
+- We pushed `Buffer`s (not strings) so no byte ever gets half-decoded. `Buffer.concat` joins them, then a
+  single `.toString()` decodes cleanly.
+
+### Alternatives & notes
+- **`req.setEncoding("utf8")`** makes `data` chunks arrive as `string` instead of `Buffer` (Node decodes
+  each chunk for you). Simpler, but risks splitting a multibyte char across two chunks — for non-ASCII,
+  collecting `Buffer`s is safer.
+- **Memory caveat (advanced):** collecting the *entire* body in an array works for learning, but huge
+  uploads hold everything in RAM. Production streams the body straight to disk/parser (backpressure-aware).
+- **Backpressure:** `res.write()` returns `false` when the outgoing buffer is full (Lecture 30) — the
+  stream telling you "slow down."
+
+### Real Buffer decode example (from a live `console.log(chunk)`)
+- A pasted `Buffer` began `6e 61 6d 65 3d` → decoded utf-8 = `name=`, then `55 73 61 6d 61` = `Usama`.
+  So it was an `application/x-www-form-urlencoded` body. Another began `name=What+is+a+paragraph%3F…`
+  where `+` = space and `%3F` = `?` — URL-encoding that only `new URLSearchParams` decodes correctly
+  (`JSON.parse` would throw).
+- Node truncates the *printed* Buffer (`… 127 more bytes`), but the full bytes are in the chunk — never
+  trust the visible slice; accumulate every chunk, then decode once.
+
+## TypeScript mapping
+- A chunk is typed `Buffer` (global): `req.on("data", (c: Buffer) => ...)`.
+- `Buffer.concat(chunks: readonly Uint8Array[]): Buffer`.
+- `buffer.toString(encoding?: BufferEncoding): string` — `BufferEncoding` validates the literal
+  (`"utf-8"`).
+- `req: stream.Readable`, `res: stream.Writable` (via `IncomingMessage`/`ServerResponse`).
+
+## Notes & gotchas
+- **Rule of thumb:** Collect, don't decode (push `Buffer`s) → `Buffer.concat` (byte level) → decode once
+  with `.toString("utf-8")` → then parse. Never decode a partial chunk if non-ASCII is involved.
+- Bytes have **latent** meaning realized only when (a) you have the complete sequence and (b) apply the
+  correct interpretation (`Content-Type` → decoder → parser). Same bytes = different meaning per lens.
+- `req` Readable / `res` Writable; `'data'` = chunk, `'end'` = done, `'error'` = failed.
+- A single chunk *can* be the whole body for small payloads, but you can't rely on it — always gather.
+

@@ -1161,3 +1161,92 @@ console.log("sync 2");
 - Bottom line: Node keeps browser's microtasks > macrotasks rule, but replaces the single macrotask
   queue with **phased queues**, and inserts **`process.nextTick`** as the highest-priority callback type.
 
+---
+
+# Lecture 36: Blocking and Non-Blocking Code
+
+## What I learned
+- Lecture 36 is the practical payoff of the event-loop/libuv discussion: **blocking vs non-blocking I/O**,
+  and why it decides whether your server scales. The instructor used **`fs.write` vs `fs.writeSync`** as
+  the example.
+- **Blocking (sync):** the call **halts the main thread** until the operation finishes. Nothing else runs
+  — not other requests, not timers.
+- **Non-blocking (async):** the call **returns immediately**, hands the heavy work to the OS/libuv thread
+  pool, and invokes a **callback** (or resolves a Promise) later. The event loop stays free to serve
+  other work. This is why Node scales (Lecture 37): one main thread handles many connections because each
+  I/O is non-blocking.
+
+### fs.writeSync — blocking
+```ts
+import fs from "node:fs";
+
+const fd = fs.openSync("log.txt", "w");
+fs.writeSync(fd, "hello");      // main thread FROZEN until disk write completes
+console.log("written");         // runs ONLY after the sync write finished
+fs.closeSync(fd);
+```
+- `writeSync` returns bytes written, but only **after** the disk write is done. During that window, **the
+  entire Node process is stuck** — every in-flight request hangs.
+
+### fs.write — non-blocking
+```ts
+import fs from "node:fs";
+
+fs.open("log.txt", "w", (openErr, fd) => {
+  if (openErr) throw openErr;
+  fs.write(fd, "hello", (err: NodeJS.ErrnoException | null, bytes: number) => {
+    if (err) throw err;
+    console.log(`written ${bytes} bytes`);   // runs LATER, on the loop
+    fs.close(fd, () => {});
+  });
+});
+console.log("this runs immediately, before the write completes");
+```
+- `fs.write` hands the disk work to the libuv thread pool, returns at once, and the callback fires on the
+  main thread when the OS reports completion. The event loop kept serving other requests meanwhile.
+
+### Modern TS: the Promise API
+- Prefer `node:fs/promises` with `async/await` — **same non-blocking model**, cleaner syntax:
+  ```ts
+  import fs from "node:fs/promises";
+
+  async function save(text: string): Promise<void> {
+    const fd = await fs.open("log.txt", "w");
+    try {
+      await fs.write(fd, text);   // non-blocking; loop stays free
+    } finally {
+      await fs.close(fd);
+    }
+  }
+  ```
+- `await` pauses *this function* but **never blocks the event loop** — other requests keep flowing.
+
+### How it connects to earlier lectures
+- **Lectures 27/35 (event loop):** a blocking call freezes the running phase; the loop can't dispatch the
+  next callback until it returns.
+- **OS-threads discussion:** non-blocking `fs` work runs on the **libuv thread pool** (default 4 threads);
+  your JS never touches those threads — only the *completion callback* lands back on the main thread.
+- **Lecture 26 (request listener):** never put `writeSync`/`readFileSync` inside a handler in production —
+  it blocks every concurrent request.
+
+## TypeScript mapping
+- `fs.writeSync(fd, data) => number` — **blocks**. `fs.write(fd, data, cb) => boolean` — non-blocking.
+  `fs.writeFile(file, data, cb)` — non-blocking. `fs/promises.writeFile(file, data) => Promise<void>`.
+- `import fs from "node:fs"` for sync + callback APIs; `import fs from "node:fs/promises"` for the Promise API.
+- Callback is **error-first**: `(err: NodeJS.ErrnoException | null, bytes: number) => void`.
+- `fs.write` returns `boolean` (backpressure flag) — same as `res.write` (Lecture 30).
+- Strict TS: the callback's `err` is `NodeJS.ErrnoException | null`, so guard `if (err) throw err`.
+
+## Notes & gotchas
+- **One `writeSync` in a hot path kills throughput** — all concurrent requests freeze during the disk wait.
+  Avoid sync fs in servers.
+- **Non-blocking ≠ free of the main thread entirely.** The *completion callback* still runs on the main
+  thread (tiny/fast); the slow disk work was offloaded.
+- **`await` ≠ blocking.** It suspends the async function, not the loop.
+- **Mixing sync into async code** is the classic footgun: a `readFileSync` buried in an `async` handler
+  still blocks everything.
+- Default to `node:fs/promises` + `await` in modern TS — clearer than callback nesting, identical
+  non-blocking semantics.
+- **Mental model:** Blocking = the thread waits (frozen). Non-blocking = the thread delegates and
+  continues. `writeSync` freezes your server; `write`/`writeFile` (or `fs/promises`) let the loop breathe.
+

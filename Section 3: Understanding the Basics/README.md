@@ -739,3 +739,83 @@ if (pathname === "/api/users") {
 - Method + path together define a route (GET `/users` vs POST `/users` differ).
 - No framework yet — this is raw `if`/`switch` routing; later tooling (Express) abstracts it.
 
+---
+
+# Lecture 33: Redirecting Requests
+
+## What I learned
+- Lecture 33 covers **redirects** — telling the client "go look over there instead." A redirect isn't
+  your server sending the new content; it's your server sending a **status code + a `Location` header**,
+  and the **browser then makes a second request** to that location.
+- A redirect handler just points the way; it does **not** serve the new content itself.
+
+### How a redirect works
+```mermaid
+flowchart LR
+    B[Browser] -->|GET /old| S[Server]
+    S -->|301/302 + Location: /new| B
+    B -->|GET /new (automatic)| S
+    S -->|200 + content| B
+```
+- The server replies with a **3xx status** + `Location` header. The browser reads it, issues a *new*
+  request to `Location`, and your server serves that route normally. So **two requests happen**.
+
+### The code
+```ts
+import http, { IncomingMessage, ServerResponse } from "node:http";
+
+const server = http.createServer((req: IncomingMessage, res: ServerResponse) => {
+  const url = new URL(req.url ?? "", "http://localhost");
+
+  if (url.pathname === "/old") {
+    res.statusCode = 302;
+    res.setHeader("Location", "/new");
+    res.end(); // still required — ends the response (no body needed)
+    return;
+  }
+
+  if (url.pathname === "/new") {
+    res.setHeader("Content-Type", "text/html; charset=utf-8");
+    res.end("<h1>New page</h1>");
+    return;
+  }
+
+  res.statusCode = 404;
+  res.end("<h1>404</h1>");
+});
+server.listen(3000);
+```
+- Visiting `/old` → server replies `302 Location: /new` → browser auto-requests `/new` → server returns
+  the HTML.
+
+### The status codes
+- **`301 Moved Permanently`** — new *permanent* home. Browsers **cache** it aggressively; future visits
+  to `/old` may skip your server entirely.
+- **`302 Found`** (temporary) — "look here for now." Not cached permanently; the browser re-asks each time.
+- (Advanced, later: `307`/`308` preserve the method; `301`/`302` historically changed POST→GET. The
+  course focuses on 301/302.)
+- **Dev tip:** use `302` while learning — `301` gets cached and makes debugging confusing.
+
+### Common patterns
+- **Trailing slash normalization:** `/about/` → `/about`.
+- **Old URL → new URL** after a site restructure.
+- **HTTP → HTTPS** (usually at a proxy/load-balancer, not the app).
+- **POST → GET** after a form submit (the classic "Post/Redirect/Get" pattern; Lecture 34 ties in).
+
+## TypeScript mapping
+- **Both pieces required:** a 3xx `statusCode` **and** the `Location` header. Either alone does nothing.
+- **`res.statusCode` is a `number`** — `301`/`302` are valid; TS validates the type.
+- **`Location` value is a `string`** — absolute URL (`https://...`) or path (`/new`) both work.
+- **You must still call `res.end()`** — even with no body. Without it, the response hangs (Lecture 26).
+  A `return` right after keeps you from accidentally falling through to more code.
+- **The target route must exist** on your server, or the second request 404s. The redirect doesn't serve
+  content itself.
+- **No body needed** for a redirect — `res.end()` with no argument is correct.
+
+## Notes & gotchas
+- A redirect = `statusCode = 301|302` + `Location` + `res.end()`. You hand the browser a signpost; the
+  browser makes the *next* request itself. Two requests total; your handler only points, it doesn't serve.
+- `301` is cached by browsers — prefer `302` during development to avoid stale-redirect confusion.
+- Always `return` after a redirect/`end` to prevent double-writing the response.
+- Use `new URL(req.url ?? "", base).pathname` for matching (query string stripped), consistent with Lecture 32.
+

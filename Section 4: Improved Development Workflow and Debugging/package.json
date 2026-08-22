@@ -1,0 +1,16 @@
+{
+  "name": "nodejs-complete-guide-section4",
+  "version": "1.0.0",
+  "description": "Section 4: Improved Development Workflow and Debugging - Node.js + TypeScript (native TS via Node)",
+  "main": "app.ts",
+  "type": "module",
+  "scripts": {
+    "start": "node app.ts",
+    "dev": "node --watch app.ts",
+    "lint": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.0",
+    "typescript": "^5.7.0"
+  }
+}

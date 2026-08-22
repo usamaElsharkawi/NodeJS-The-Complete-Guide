@@ -236,7 +236,93 @@ npm start         # node app.ts   (or: node --watch app.ts for auto-restart)
 
 # Lecture 44: Global Features vs Core Modules vs Third-Party Modules
 
-> Lecture content will be appended here after the learner provides their explanation.
+## What I learned
+- Node.js features fall into **three categories** based on availability and how you access them:
+  1. **Global features** — always available, no import needed.
+  2. **Core Node.js modules** — built into Node, no install needed, but must be imported.
+  3. **Third-party modules** — not built in, must be installed via npm AND imported.
+
+### Global features
+- **Keywords:** `const`, `let`, `function`, `if`, `for` — these are JavaScript language features, not Node-specific.
+- **Global objects:** `process`, `console`, `setTimeout`, `setInterval`, `Buffer` — available everywhere without an import statement.
+- In TypeScript, these are typed via `@types/node` (included by `"types": ["node"]` in `tsconfig.json`).
+- Example: `process.cwd()` works without any import — `process` is globally typed as `NodeJS.Process`.
+
+### Core Node.js modules
+- Built into Node.js runtime: `fs` (file system), `path` (path utilities), `http` (HTTP server/client), `crypto`, `events`, etc.
+- **No `npm install` required** — they ship with Node.
+- **Must be imported** to use them.
+- In our TypeScript + ESM setup, use the **`node:` protocol** for clarity:
+  ```ts
+  import fs from "node:fs";
+  import path from "node:path";
+  import http from "node:http";
+  ```
+- Types come from `@types/node` (already installed).
+
+### Third-party modules
+- Code written by the community, published to the npm registry.
+- **Must be installed:** `npm install <package>` (runtime) or `npm install -D <package>` (dev-only).
+- **Must be imported** after installation.
+- Example workflow:
+  ```bash
+  npm install express
+  ```
+  ```ts
+  import express from "express";
+  ```
+- Types may come from:
+  - The package itself (modern packages ship types).
+  - A separate `@types/<package>` package (install with `npm install -D @types/<package>`).
+  - Or you may need to write ambient declarations for untyped packages.
+
+### Comparison table
+
+```text
+  ┌─────────────────────┬──────────────┬──────────────┬──────────────────┐
+  │ Category            │ Install?     │ Import?      │ Type source      │
+  ├─────────────────────┼──────────────┼──────────────┼──────────────────┤
+  │ Global (JS/Node)    │ No           │ No           │ @types/node      │
+  │ Core Node.js module │ No           │ Yes          │ @types/node      │
+  │ Third-party module  │ Yes (npm)    │ Yes          │ pkg / @types/pkg │
+  └─────────────────────┴──────────────┴──────────────┴──────────────────┘
+```
+
+## TypeScript mapping
+- **Global objects:** `process`, `console`, `Buffer` are globally typed. You reference them directly.
+  TypeScript knows their types because `"types": ["node"]` in `tsconfig.json` pulls in `@types/node`.
+- **Core modules:** use `import` with the `node:` prefix (recommended in modern Node):
+  ```ts
+  import fs from "node:fs";
+  import type { IncomingMessage, ServerResponse } from "node:http";
+  ```
+  The `node:` prefix disambiguates core modules from third-party packages of the same name.
+- **`verbatimModuleSyntax` enforcement:** with this flag on, you cannot use `require()` — ESM `import` is mandatory.
+  The learner's example used `const fs = require('fs')` — that is **CJS syntax** and will not compile under our config.
+- **`import type` for type-only imports:** when you need only types from a module (e.g. `IncomingMessage`),
+  use `import type { ... }` to ensure no runtime import side-effects:
+  ```ts
+  import type { IncomingMessage, ServerResponse } from "node:http";
+  ```
+- **Third-party types:** if a package ships its own types (has a `.d.ts` file or `"types"` field in its `package.json`),
+  TypeScript picks them up automatically. If not, install `@types/<package>` as a dev dependency.
+- **No `enum` / `const enum`:** with `erasableSyntaxOnly`, use `const` objects or `union` types instead.
+- **No implicit `any`:** `strict: true` ensures every imported value has a known type — if a third-party
+  package lacks types and you didn't install `@types/...`, TypeScript errors rather than silently falling back to `any`.
+
+## Notes & gotchas
+- **`require()` is forbidden** in our ESM + `verbatimModuleSyntax` setup. Always use `import`.
+- **Core modules do NOT need `npm install`.** If you see `npm install fs`, that is wrong — `fs` is built in.
+- **The `node:` prefix is best practice** for core modules (e.g. `"node:fs"` vs `"fs"`). It makes intent
+  explicit and prevents shadowing by a third-party package named `fs`.
+- **Global objects are not imported but are typed.** `process` works without an import statement, but
+  TypeScript still knows its type via `@types/node`. Removing `"types": ["node"]` from `tsconfig.json`
+  would make `process` implicitly `any`.
+- **Third-party packages without types:** if you `npm install` a package and TypeScript complains
+  `Cannot find module 'pkg'` or `Could not find a declaration file`, install `@types/pkg` or add
+  a `declare module` ambient declaration.
+- **`node_modules/` is local.** Third-party packages are installed per-project. Another project on
+  your machine needs its own `npm install` — global installs (`-g`) are for CLI tools, not app code.
 
 ---
 

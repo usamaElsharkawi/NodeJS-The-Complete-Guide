@@ -639,19 +639,278 @@ npm start         # node app.ts   (or: node --watch app.ts for auto-restart)
 
 # Lecture 48: Finding & Fixing Syntax Errors
 
-> Lecture content will be appended here after the learner provides their explanation.
+## What I learned
+- **Syntax errors are caught before execution.** The parser/compiler rejects invalid grammar —
+  the file never runs.
+- **TypeScript compiler output** is your primary diagnostic tool. `tsc --noEmit` prints the error
+  code, file path, line/column, and a human-readable message.
+- **Fix workflow:** read the *first* error only, fix it, rerun `tsc --noEmit`. One missing brace can
+  cause 20 downstream errors; fixing the root cause usually clears the rest.
+
+### Reading TypeScript compiler errors
+- **Error code** — e.g. `TS1005`, `TS2304`, `TS2739` — tells you the category.
+- **File + line/column** — points to the exact location.
+- **Message** — describes what was expected vs what was found.
+- **Cascading errors** — one missing token can produce many errors. Fix the first one, then re-run.
+
+### Common TypeScript syntax errors in our config
+
+| Error | Cause | Fix |
+|---|---|---|
+| `TS2307: Cannot find module` | Wrong import path, missing `.ts` extension, missing `@types/` | Fix path, add extension, install types |
+| `TS1192: Module resolves to non-module` | `import` used for type-only under `verbatimModuleSyntax` | Change to `import type` |
+| `TS2693: 'X' only refers to a type` | Mixing type-only and value imports | Separate `import type` from `import` |
+| `TS1164: Unsupported parameter property` | Constructor param properties with `erasableSyntaxOnly` | Remove `public`/`private` on params |
+| `TS1259: Labeled tuple elements` | Target/ES mismatch | Ensure `target: "ES2023"` in `tsconfig.json` |
+
+### The fix loop
+
+```text
+  tsc --noEmit  (fails)
+       │
+       ▼
+  Read first error only
+       │
+       ▼
+  Fix that error
+       │
+       ▼
+  tsc --noEmit again
+       │
+       ▼
+  Repeat until clean
+```
+
+## TypeScript mapping
+- **`tsc --noEmit` is our syntax-error gate.** It runs before every `npm start`. If it passes, your
+  code is syntactically valid and type-safe.
+- **`strict: true` + `erasableSyntaxOnly` + `verbatimModuleSyntax`** are the guards that turn many
+  JS pitfalls into caught syntax/type errors.
+- **Native TS on Node 24:** Node's *parser* catches raw syntax errors at startup, but Node does
+  **not** type-check. `tsc` is still required for full error detection.
+- **Error messages are actionable.** TypeScript tells you *what* is wrong and *where*. The skill is
+  learning to read the output fast — `TS2307` means "missing module," `TS1192` means "wrong import
+  kind."
+- **Editor integration:** VS Code shows these errors as red squiggles *while you type*, before you
+  even run `tsc`. This is the fastest feedback loop.
+
+## Notes & gotchas
+- **Fix the first error first.** Cascading errors are common. One missing `}` or `)` can produce
+  dozens of unrelated-looking errors downstream.
+- **Don't ignore compiler warnings.** Even though `tsc` returns `0` for warnings, our `strict` config
+  turns many warnings into hard errors.
+- **Missing `.ts` extension in imports** — with `allowImportingTsExtensions: true` and `NodeNext`,
+  you must write `./routes.ts`, not `./routes`. This is a common `TS2307` cause.
+- **`import type` is not optional under `verbatimModuleSyntax`.** Forgetting it is a `TS1192` or
+  `TS2693` error. Use it for every type-only import.
+- **Keep `tsc --noEmit` in your muscle memory.** Run it after every meaningful change. It's fast
+  (no emit) and catches errors before Node ever runs your code.
 
 ---
 
 # Lecture 49: Dealing with Runtime Errors
 
-> Lecture content will be appended here after the learner provides their explanation.
+## What I learned
+- **Runtime errors occur during execution.** The code parses and compiles fine, but an operation
+  fails while running.
+- **The process crashes by default** unless the error is caught. Node throws an exception; if uncaught,
+  the process exits with code `1`.
+- **Defensive coding** (`try/catch`, null checks, type guards) + **process-level safety nets**
+  (`uncaughtException`, `unhandledRejection`) are the tools.
+
+### The runtime error flow
+
+```text
+  Code runs
+     │
+     ▼
+  Operation fails
+  (JSON.parse, fs.readFile, null access)
+     │
+     ▼
+  ┌─────────────┐       ┌─────────────┐
+  │  try/catch  │──────▶│  Recover    │
+  │  catches it │       │  log + fallback │
+  └─────────────┘       └─────────────┘
+         │
+         ▼
+  ┌─────────────┐
+  │  Uncaught   │
+  │  → crash    │
+  └─────────────┘
+```
+
+### Key patterns
+
+**`try/catch` for synchronous + async code:**
+```ts
+try {
+  const data = JSON.parse(rawBody);
+  res.statusCode = 200;
+  res.end(JSON.stringify(data));
+} catch (err) {
+  res.statusCode = 400;
+  res.end("Invalid JSON");
+}
+```
+
+**Error-first callbacks (Node convention):**
+```ts
+fs.readFile("config.json", "utf8", (err: NodeJS.ErrnoException | null, data: string) => {
+  if (err) {
+    console.error("Failed to read config:", err);
+    res.statusCode = 500;
+    res.end("Server misconfigured");
+    return;
+  }
+  // use `data`
+});
+```
+
+**Process-level safety nets:**
+```ts
+process.on("uncaughtException", (err: Error) => {
+  console.error("Uncaught exception:", err);
+  process.exit(1);
+});
+
+process.on("unhandledRejection", (reason: unknown) => {
+  console.error("Unhandled rejection:", reason);
+  process.exit(1);
+});
+```
+
+### Common runtime errors in our context
+
+| Error | Cause | Prevention |
+|---|---|---|
+| `JSON.parse` throws | Malformed or empty body | Wrap in `try/catch` |
+| `new URL(undefined, ...)` | `req.url` not null-checked | `req.url ?? ""` (TS enforces this) |
+| `ERR_STREAM_WRITE_AFTER_END` | `res.end()` called twice | Ensure exactly one `end` per request |
+| `ERR_HTTP_HEADERS_SENT` | `setHeader` after `write`/`end` | Set headers before body |
+| `EADDRINUSE` | Port already bound | Handle `'error'` event on server |
+
+## TypeScript mapping
+- **`strictNullChecks` + `exactOptionalPropertyTypes`** prevent many runtime crashes at compile time.
+  `req.url` is `string | undefined`; TypeScript forces you to handle `undefined` before passing it
+  to `new URL()`.
+- **`unknown` over `any` for caught errors:** `catch (err)` gives you `unknown` in TS. Narrow it
+  before using:
+  ```ts
+  catch (err) {
+    if (err instanceof Error) {
+      console.error(err.message);
+    }
+    res.statusCode = 400;
+    res.end("Bad request");
+  }
+  ```
+- **`NodeJS.ErrnoException`** types system errors from `fs`, `net`, etc. — gives you `err.code`,
+  `err.message`, `err.errno`.
+- **The type system is not a runtime guard.** TypeScript ensures you *call* `JSON.parse` with a
+  `string`, but it cannot ensure that string is valid JSON. `try/catch` is still required.
+- **Native TS execution:** Node strips types at runtime but does not add runtime type checks.
+  Type safety is a compile-time guarantee only.
+
+## Notes & gotchas
+- **Always wrap `JSON.parse` in `try/catch`.** Client input is untrusted; malformed JSON is common.
+- **Always null-check `req.url`, `req.method`, `req.headers[...]`.** TypeScript enforces this with
+  `strict` mode — treat the compiler warnings as runtime bugs waiting to happen.
+- **`res.end()` must be called exactly once per request.** Double-ending throws `ERR_STREAM_WRITE_AFTER_END`.
+  Use `return` after every `res.end()` to prevent fall-through.
+- **`res.setHeader` must come before `res.write`/`res.end`.** Once the header block is flushed,
+  further `setHeader` calls throw `ERR_HTTP_HEADERS_SENT`.
+- **`process.on('uncaughtException', ...)` is a last resort.** It prevents the default crash
+  behavior, but your process state may be corrupted. Log, clean up, and exit — don't try to
+  continue serving.
+- **`process.on('unhandledRejection', ...)`** catches Promise rejections with no `.catch()` handler.
+  Without it, Node prints a warning and may exit (depending on version and flags).
 
 ---
 
 # Lecture 50: Logical Errors
 
-> Lecture content will be appended here after the learner provides their explanation.
+## What I learned
+- **Logical errors are the hardest category.** The code runs without crashing, but produces
+  **wrong results**. No error message, no stack trace, no compiler warning.
+- **They require debugging tools** (debugger, logging, tests, code review) rather than guards.
+- **TypeScript cannot catch logical errors.** The type system ensures you use values *correctly*
+  according to their types, but it cannot verify you're using the *right* values for your business
+  logic.
+
+### What logical errors look like
+
+| Bug | Symptom | Detection |
+|---|---|---|
+| Wrong status code (`200` vs `201`) | Client thinks creation failed | Review API spec, tests |
+| Off-by-one loop (`i <= length`) | Last item skipped / out-of-bounds | Debugger, console.log |
+| Wrong comparison (`=` vs `===`) | Condition always truthy/falsy | Code review, linter |
+| Wrong field queried | Wrong data returned | Tests, logging |
+| Missing method check in route | POST hits GET handler | Debugger, request inspection |
+
+### Debugging strategies (easiest to most powerful)
+
+**1. `console.log` / `console.table` / `console.dir`:**
+- Quick, low-tech, always works.
+- Log inputs, intermediate values, chosen branches.
+- In our server context: log `req.method`, `req.url`, parsed body, `pathname`, status code sent.
+
+**2. Rubber duck debugging:**
+- Explain your code line by line to an imaginary listener.
+- The act of articulating logic often reveals the flaw.
+
+**3. The debugger (Lectures 51–54):**
+- Set breakpoints, step through code, inspect variables, watch expressions.
+- The most powerful tool for logical errors because it lets you observe *exact* state at *exact*
+  moments.
+
+**4. Code review:**
+- A fresh pair of eyes catches assumptions you've become blind to.
+
+### The error-type strategy summary
+
+```text
+  ┌─────────────────┬──────────────────────┬──────────────────────┐
+  │ Error Type      │ Tool                 │ TypeScript helps?   │
+  ├─────────────────┼──────────────────────┼──────────────────────┤
+  │ Syntax          │ tsc --noEmit         │ Yes — catches it     │
+  │                 │                      │ before execution     │
+  ├─────────────────┼──────────────────────┼──────────────────────┤
+  │ Runtime         │ try/catch, guards,   │ Partially — reduces  │
+  │                 │ process handlers     │ surface area         │
+  ├─────────────────┼──────────────────────┼──────────────────────┤
+  │ Logical         │ Debugger, logging,   │ No — must reason     │
+  │                 │ tests, code review   │ about semantics      │
+  └─────────────────┴──────────────────────┴──────────────────────┘
+```
+
+## TypeScript mapping
+- **TypeScript cannot catch logical errors.** `res.statusCode = 200` is perfectly valid TypeScript —
+  the type system doesn't know your API spec requires `201`.
+- **`strict` mode reduces the surface area** for logical errors by eliminating a class of runtime
+  crashes. With fewer surprises, the remaining bugs are more likely to be logical (and easier to isolate).
+- **`as` casts are logical-error amplifiers.** When you cast `unknown` to a specific type without
+  validation, you're telling TypeScript "trust me." If you're wrong, the logical error propagates
+  silently.
+- **Enums and magic numbers:** `erasableSyntaxOnly` blocks `enum`, so you use `const` objects or
+  union types. This *helps* with logical errors because you get autocompletion and exhaustiveness
+  checking instead of raw numbers.
+- **Tests are the logical-error safety net.** TypeScript checks types; tests check behavior. Write
+  tests that assert status codes, response shapes, and edge cases.
+
+## Notes & gotchas
+- **Logical errors are silent killers.** The server runs, `tsc` passes, tests might even pass — but
+  users get wrong data. They often stem from misunderstood requirements or copied code that almost fits.
+- **The debugger is your primary logical-error tool.** Lectures 51–54 cover breakpoints, stepping,
+  watch expressions, and the debug console — all aimed at logical errors.
+- **`console.log` is not a substitute for the debugger** — but it's often faster for simple "what
+  value does this have right now?" questions.
+- **Write tests for behavior, not just types.** TypeScript ensures your code is well-typed; tests
+  ensure it does the right thing. Both are needed.
+- **Code review catches logical errors** that the author has become blind to. If you're stuck, ask
+  a colleague to read your routing logic out loud.
+- **`tsc --noEmit` passing means "no syntax/type errors" — not "no bugs."** After `lint` passes,
+  the remaining failure modes are runtime and logical errors.
 
 ---
 

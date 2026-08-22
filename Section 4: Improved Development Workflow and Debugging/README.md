@@ -515,7 +515,125 @@ npm start         # node app.ts   (or: node --watch app.ts for auto-restart)
 
 # Lecture 47: Understanding different Error Types
 
-> Lecture content will be appended here after the learner provides their explanation.
+## What I learned
+- Node.js errors fall into **three categories** based on *when* they surface and *how* you detect them.
+  The category determines your debugging strategy: compiler, runtime guard, or debugger.
+- **Syntax errors** — caught before execution. The parser/compiler rejects invalid grammar.
+- **Runtime errors** — caught during execution. Valid syntax, but an invalid operation occurs while running.
+- **Logical errors** — never caught by the runtime. The code runs, but produces the wrong result.
+
+### The three categories
+
+| Error Type | When caught | How to detect | Fix strategy |
+|---|---|---|---|
+| **Syntax** | Before execution (parser / `tsc`) | Compiler error message | Read message, fix grammar |
+| **Runtime** | During execution (process crashes) | Stack trace, error event | `try/catch`, guards, error handlers |
+| **Logical** | After execution (wrong result) | No error — silent wrong output | Debugger, logging, tests, code review |
+
+### 1. Syntax errors
+- **Definition:** code violates the language grammar — missing bracket, misspelled keyword, invalid statement structure.
+- **Outcome:** the file **never runs**. Node refuses to execute it. `tsc` refuses to compile it.
+- **Example (TypeScript context):**
+  ```ts
+  // Missing closing brace — syntax error
+  function broken() {
+    console.log("hi");
+  // parser/compiler throws before any code runs
+  ```
+  ```ts
+  // `require()` with `verbatimModuleSyntax` — syntax/type error
+  import fs from "node:fs";
+  const data = require("fs"); // TS / ESM parse error
+  ```
+- **Fix speed:** usually fast. The error message points to the line and often describes the expected token.
+
+### 2. Runtime errors
+- **Definition:** the syntax is valid, but an operation fails during execution. `JSON.parse` on malformed input, reading a file that doesn't exist, dividing by zero, accessing a property on `null`.
+- **Outcome:** the process **crashes** unless caught. Node throws an exception and, if uncaught, exits with code `1`.
+- **Example:**
+  ```ts
+  // Syntax is fine — but at runtime, `req.url` might be `undefined`
+  const url = new URL(req.url, "http://localhost"); // throws if `req.url` is undefined
+  ```
+  ```ts
+  // `JSON.parse` throws on bad input
+  const data = JSON.parse("not-json"); // runtime SyntaxError
+  ```
+- **Fix strategy:** defensive coding (`try/catch`, null checks, type guards) + global error handlers
+  (`process.on('uncaughtException', ...)`).
+
+### 3. Logical errors
+- **Definition:** the code runs without crashing, but produces **wrong results**. Wrong comparison, off-by-one, wrong status code, querying the wrong field.
+- **Outcome:** no error message. The process stays alive. The client gets a response — but it's incorrect.
+- **Example:**
+  ```ts
+  // Runs fine, but sends the wrong status code
+  res.statusCode = 200; // should be 201 for "created"
+  res.end("User created");
+  ```
+  ```ts
+  // Logic bug: checks pathname but ignores method
+  if (pathname === "/users") {
+    // Handles GET, POST, DELETE all the same
+    // But GET /users should list, POST /users should create
+  }
+  ```
+- **Fix strategy:** the hardest category. Requires debugging (Lectures 51–54), logging, tests, or code review.
+
+### Decision tree
+
+```text
+  Does the code run?
+       │
+       ├─ NO → Syntax error
+       │        → Fix: read compiler/parser message, correct grammar
+       │
+       └─ YES → Does it crash?
+                │
+                ├─ YES → Runtime error
+                │        → Fix: try/catch, guards, error handlers
+                │
+                └─ NO → Is the result wrong?
+                         │
+                         ├─ YES → Logical error
+                         │        → Fix: debugger, logging, tests
+                         │
+                         └─ NO → Correct! (or a test is missing)
+```
+
+## TypeScript mapping
+- **Syntax errors → `tsc --noEmit` catches them first.** With `strict: true`, `erasableSyntaxOnly`,
+  `verbatimModuleSyntax`, the compiler rejects invalid syntax *before* Node ever runs the code.
+  This is our first line of defense (the `lint` script).
+- **Runtime errors → TypeScript reduces but cannot eliminate them.** `strictNullChecks` +
+  `exactOptionalPropertyTypes` force you to handle `undefined`/`null`, preventing a whole class of
+  runtime crashes. But `JSON.parse` can still throw, files can still be missing, network calls can
+  still fail — these require runtime guards (`try/catch`, `if` checks).
+- **Logical errors → TypeScript is blind to these.** The type system ensures you're using values
+  *correctly* according to their types, but it cannot verify you're using the *right* values for your
+  business logic. `res.statusCode = 200` is perfectly typed — it's just semantically wrong if the
+  spec says `201`. Debugging (Lectures 51–54) is the tool for this.
+- **Native TS execution on Node 24:** Node's parser catches *syntax* errors at startup. But Node does
+  **not** type-check — that's still `tsc`'s job. And it certainly doesn't catch logical errors.
+- **`any` is a syntax-level escape hatch.** When you cast to `any` to silence TypeScript, you're opting
+  out of the syntax-error safety net — and you may introduce runtime errors that TS would have caught.
+
+## Notes & gotchas
+- **Syntax errors are the easiest** — the compiler tells you exactly what and where. Don't ignore the
+  red squiggles in your editor or the `tsc` output.
+- **Runtime errors in production need handlers.** `process.on('uncaughtException', ...)` and
+  `process.on('unhandledRejection', ...)` prevent silent crashes and let you log state before exiting.
+  (Ties back to Lecture 28 graceful shutdown.)
+- **Logical errors are silent killers.** The server runs, tests pass, but users get wrong data. They
+  often stem from misunderstood requirements or copied code that almost fits.
+- **TypeScript shifts the curve:** with strict mode, many former runtime errors become syntax/type errors
+  caught at compile time. But the remaining runtime + all logical errors still need traditional
+  debugging skills.
+- **The debugger (Lectures 51–54) is primarily a logical-error tool.** Syntax errors don't need a
+  debugger — the compiler already found them. Runtime errors often need guards more than stepping
+  through code. Logical errors are where breakpoints and watch expressions shine.
+- **`tsc --noEmit` is your syntax-error gate.** Run it before every `npm start`. If it passes, you know
+  your code is syntactically valid and type-safe — the remaining failure modes are runtime and logical.
 
 ---
 

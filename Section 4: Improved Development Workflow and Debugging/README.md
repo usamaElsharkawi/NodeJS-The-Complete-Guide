@@ -430,7 +430,86 @@ npm start         # node app.ts   (or: node --watch app.ts for auto-restart)
 
 # Lecture 46: Global & Local npm Packages
 
-> Lecture content will be appended here after the learner provides their explanation.
+## What I learned
+- **Local packages** are installed into your project's `node_modules/` folder and listed in
+  `package.json` (`dependencies` or `devDependencies`). They are **only available inside that project**.
+- **Global packages** are installed with `npm install -g <package>` into a central machine-wide folder.
+  Their binaries are symlinked into a global `PATH` location, making them available **everywhere** in
+  any terminal, in any project.
+- **The sharing advantage of local packages:** you can share your project source code without
+  `node_modules/`. Anyone cloning the repo runs `npm install`, npm rebuilds the exact
+  `node_modules/` tree from `package.json` + `package-lock.json`. This keeps shared repos small —
+  just source code, not megabytes of installed packages.
+- **Course code snippets are shared this way** — you extract the code, run `npm install`, and all
+  dependencies are restored.
+- **Why `nodemon app.ts` failed in a random terminal:** because that terminal was in a folder without
+  a local Nodemon install. Locally installed tools are only available via `node_modules/.bin/` within
+  the project — npm injects that path automatically for scripts, but not for manual terminal commands.
+- **Global install is possible but not required for project tools:**
+  ```bash
+  npm install -g nodemon
+  ```
+  The `-g` flag installs the package globally, making `nodemon` available anywhere. But this is
+  **not recommended for project-specific tools** because it breaks reproducibility.
+
+### Local vs Global — side by side
+
+```text
+  Local (recommended for project tools):
+  ┌─────────────────────────────────────────┐
+  │  my-project/                            │
+  │  ├── package.json  ← lists nodemon      │
+  │  ├── node_modules/                      │
+  │  │   └── nodemon/                       │
+  │  └── app.ts                             │
+  │                                          │
+  │  Run: npm run dev                       │
+  │  → npm finds node_modules/.bin/nodemon  │
+  │  → nodemon runs, watches .ts files       │
+  └─────────────────────────────────────────┘
+
+  Global (for personal CLI tools):
+  ┌─────────────────────────────────────────┐
+  │  /usr/local/lib/node_modules/           │
+  │  └── nodemon/                           │
+  │                                          │
+  │  /usr/local/bin/                        │
+  │  └── nodemon → symlink                  │
+  │                                          │
+  │  Run anywhere: nodemon app.ts           │
+  │  → OS finds /usr/local/bin/nodemon      │
+  └─────────────────────────────────────────┘
+```
+
+## TypeScript mapping
+- **Local packages are typed per-project.** Types are resolved from that project's `node_modules/`.
+  If a package ships its own types, TypeScript picks them up automatically. If not, install
+  `@types/<package>` as a local dev dependency.
+- **Global packages are invisible to TypeScript.** If you install `nodemon` globally, your project's
+  `tsc` knows nothing about it — but this is fine because you never `import nodemon` in source code.
+  It is purely a CLI invocation.
+- **`node_modules/.bin` is project-local.** When npm runs a script, it prepends **that project's**
+  `node_modules/.bin` to `PATH`. A global Nodemon could shadow the local one, causing version
+  mismatches between collaborators.
+- **Reproducibility is a type-safety concern.** If a global package version differs between machines,
+  runtime behavior can diverge. Local installs + `package-lock.json` pin exact versions for everyone.
+- **`tsc --noEmit` only sees local types.** It type-checks against the `node_modules/` in the current
+  project. Global packages do not affect type-checking.
+
+## Notes & gotchas
+- **Always install project tools locally.** `npm install -D nodemon` ensures collaborators get the
+  same version via `npm install`. Never rely on a global install for project-specific tools.
+- **Global installs don't touch `package.json`.** If you `npm install -g nodemon`, your project's
+  `package.json` still lacks it. A teammate cloning your repo won't get Nodemon.
+- **Version drift is real.** Global packages update independently per machine. `nodemon` v3 on your
+  machine, v2 on a teammate's — bugs become hard to reproduce. Local + lockfile prevents this.
+- **`npx` bridges local/global.** `npx nodemon app.ts` runs the **local** Nodemon without needing
+  a global install or an npm script. It checks `node_modules/.bin/` first, then falls back to global.
+- **Global bin and PATH issues.** On some systems, the global npm bin folder isn't in `PATH` by default.
+  If `npm install -g nodemon` succeeds but `nodemon` says "command not found", add the global bin
+  directory to your shell's `PATH`.
+- **Don't mix scopes carelessly.** Using a global package when a local one is expected can mask
+  version mismatches. Stick to local installs for anything your code or scripts depend on.
 
 ---
 

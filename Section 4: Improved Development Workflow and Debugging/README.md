@@ -916,34 +916,412 @@ process.on("unhandledRejection", (reason: unknown) => {
 
 # Lecture 51: Using the Debugger
 
-> Lecture content will be appended here after the learner provides their explanation.
+## What I learned
+- A **debugger** lets you pause running code, inspect state, and step through execution line by line —
+  replacing guesswork with observation. It is the primary tool for logical errors (Lecture 50).
+- Debugging is not just "fixing bugs" — it is the process of understanding what your code is *actually*
+  doing versus what you *think* it is doing.
+- The debugger is an **interactive inspector** attached to your running Node process.
+
+### Key debugger concepts
+
+| Term | Meaning |
+|---|---|
+| **Breakpoint** | A marker that says "pause here." Execution stops when it hits this line. |
+| **Step Over** | Execute the current line and move to the next. Stay in the current function. |
+| **Step Into** | If the current line calls another function, jump *into* that function and pause at its first line. |
+| **Step Out** | Finish executing the current function and return to its caller. |
+| **Continue** | Resume normal execution until the next breakpoint or program end. |
+| **Watch/Inspect** | View the current value of a variable or expression at the paused moment. |
+| **Call Stack** | The chain of functions that led to the current paused line. |
+
+### Why the debugger beats `console.log` for logical errors
+- `console.log` shows you **one moment** in time. The debugger lets you **traverse** time — step forward,
+  inspect everything at that exact point, and see *why* a branch was taken.
+- You can observe the *exact* value a variable had at the *exact* moment of a decision — impossible with
+  scattered `console.log` statements.
+
+## TypeScript mapping
+- **The debugger works on compiled/type-stripped code.** On Node 24 with native TS, `node app.ts` strips
+  types and executes. The debugger attaches to the running process and inspects **runtime values** — plain
+  JS objects, not TS types.
+- **Types are gone at runtime.** The debugger shows you `{ name: "Alice", email: "alice@example.com" }` —
+  it doesn't know this satisfies `UserInput`. Type safety is a compile-time guarantee; debugging is a
+  runtime activity.
+- **Breakpoints are not type-aware.** You set them on source lines. With native TS execution on Node 24,
+  Node can often map breakpoints directly to the original `.ts` file without source maps.
+- **Watch expressions respect types in your editor.** VS Code shows inferred TS types on hover during
+  debugging, but the actual runtime values are plain JS.
+
+## Notes & gotchas
+- **Start with `console.log` for simple questions** — it's faster for "is this code even reached?"
+- **Switch to the debugger when `console.log` isn't enough** — when you need to inspect complex state,
+  understand why a branch was taken, or verify assumptions across multiple function calls.
+- **The debugger doesn't prevent all bugs** — it helps you *find* them. You still need to write the
+  correct fix.
+- **Breakpoints survive restarts in VS Code** — if you're using Nodemon, VS Code can re-attach
+  automatically after each restart (Lecture 52).
+- **Conditional breakpoints** — break only when a condition is true (e.g. `req.method === "POST"`).
+  Essential for debugging routes that fire frequently.
+- **Logpoints** — VS Code's "logpoint" acts like a `console.log` without modifying code. Useful for
+  production-like debugging without adding temporary `console.log` statements.
 
 ---
 
 # Lecture 52: Restarting the Debugger Automatically After Editing our App
 
-> Lecture content will be appended here after the learner provides their explanation.
+## What I learned
+- **The problem:** You hit a breakpoint, inspect state, realize you need to fix code. You stop the
+  debugger, edit the file, restart, re-set breakpoints — tedious loop.
+- **The solution:** Combine **Nodemon** (auto-restart on file changes) with **Node's inspector**
+  (`--inspect` or `--inspect-brk`) for a seamless edit-debug cycle.
+
+### The combined workflow
+
+```text
+  1. Start: nodemon --inspect app.ts
+  2. VS Code attaches to inspector port (9229)
+  3. You hit a breakpoint, inspect state
+  4. You edit app.ts to fix the bug
+  5. Nodemon detects change, restarts Node process
+  6. Inspector is available again (VS Code may auto-reconnect)
+  7. Hit the endpoint, hit breakpoint again, verify fix
+  8. Repeat
+```
+
+### Key flags
+- `--inspect` — starts the inspector and runs the app. Breakpoints work after the app starts.
+- `--inspect-brk` — starts the inspector and **pauses before any user code runs**. Useful for debugging
+  startup logic.
+- `--inspect=0.0.0.0:9229` — bind to a specific interface/port (useful for Docker/WSL).
+
+### VS Code launch config with Nodemon
+
+```json
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "type": "node",
+      "request": "launch",
+      "name": "Debug with Nodemon",
+      "runtimeExecutable": "nodemon",
+      "runtimeArgs": ["--inspect", "app.ts"],
+      "console": "integratedTerminal"
+    }
+  ]
+}
+```
+
+- `runtimeExecutable: "nodemon"` — VS Code launches Nodemon instead of Node directly.
+- Nodemon handles file watching and restarts; the inspector stays available across restarts.
+
+## TypeScript mapping
+- **Source maps:** with native TS execution, Node 24 can often debug `.ts` files directly. Source maps
+  are less critical than in pre-native-TS setups.
+- **Restart resets all state.** Every Nodemon restart creates fresh variables. You cannot preserve state
+  across restarts — this is good, because each debug session starts clean and reproducible.
+- **`console.log` + debugger is a powerful combo.** Use `console.log` for quick "is this code reached?"
+  checks, then the debugger for deep inspection when you find the problematic area.
+- **Breakpoints are preserved in VS Code** across Nodemon restarts if you use the `launch.json` config
+  above. VS Code re-attaches to the new inspector instance automatically.
+
+## Notes & gotchas
+- **Nodemon forwards `SIGINT`.** `CTRL+C` kills the child Node process and then Nodemon exits —
+  graceful shutdown handlers still fire.
+- **Infinite restart loops** — if the restart itself changes a watched file (e.g. a logger writing to a
+  watched log file), Nodemon can loop. Use `nodemon.json` `ignore` patterns.
+- **`--inspect-brk` pauses on every restart** — useful for debugging startup, annoying for normal
+  development. Use `--inspect` for the edit-debug cycle.
+- **VS Code auto-attach** — the "Auto Attach" feature in VS Code can automatically attach to Node
+  processes started with `--inspect`, even outside of `launch.json`. Enable it in settings for a
+  smoother experience.
+- **Multiple breakpoints, selective debugging** — set breakpoints at multiple decision points. Use
+  Continue (`F5`) to jump between them without restarting.
 
 ---
 
 # Lecture 53: Debugging Node.js in Visual Studio Code
 
-> Lecture content will be appended here after the learner provides their explanation.
+## What I learned
+- VS Code has **built-in Node.js debugging support**. You don't need external tools — just a
+  `launch.json` configuration and breakpoints set by clicking in the gutter.
+- **Debugging is a first-class workflow** in modern TypeScript development, not an afterthought.
+
+### The `launch.json` file
+- Located in `.vscode/launch.json`.
+- Defines how VS Code launches/attaches to your Node process.
+
+### Minimal config for our TypeScript project
+
+```json
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "type": "node",
+      "request": "launch",
+      "name": "Debug app.ts",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["--inspect-brk", "app.ts"],
+      "skipFiles": ["<node_internals>/**"],
+      "console": "integratedTerminal"
+    }
+  ]
+}
+```
+
+### How to use it
+1. Set breakpoints by clicking to the left of line numbers (red dot appears).
+2. Press `F5` or click "Run and Debug" in the sidebar.
+3. VS Code launches Node with `--inspect-brk`, pauses before your code runs.
+4. Press `F5` again to continue to your first breakpoint.
+5. Use **Step Over** (`F10`), **Step Into** (`F11`), **Step Out** (`Shift+F11`), **Continue** (`F5`).
+
+### The Debug Sidebar panels
+
+| Panel | Purpose |
+|---|---|
+| **Variables** | All variables in the current scope, expandable. Shows types in TS projects. |
+| **Watch** | Add expressions you want to monitor (e.g. `req.method`, `pathname`, `user`). Updates as you step. |
+| **Call Stack** | The chain of function calls leading to the current line. Click to jump to any frame. |
+| **Breakpoints** | List of all breakpoints. Enable/disable, set conditions, add log messages. |
+| **Debug Console** | Evaluate expressions, run code in the current context (Lecture 54). |
+
+## TypeScript mapping
+- **VS Code uses the TypeScript compiler API.** It understands your `tsconfig.json`, so it can:
+  - Set breakpoints directly in `.ts` files.
+  - Show types on hover during debugging.
+  - Navigate to definitions.
+- **`skipFiles: ["<node_internals>/**"]`** hides Node's internal source code from the call stack, so
+  you only see *your* code. Essential for sanity.
+- **`console: "integratedTerminal"`** runs the app in VS Code's terminal panel, so `console.log` output
+  appears there during debugging.
+- **Type hints in the Debugger:** VS Code shows TypeScript types in the Variables panel and on hover —
+  you see `req.method: string | undefined` directly in the debugger.
+
+## Notes & gotchas
+- **`--inspect-brk` pauses before any user code runs.** This is great for debugging module loading or
+  startup logic, but annoying for normal debugging. Use `--inspect` instead if you want to hit
+  breakpoints after the server starts.
+- **Breakpoints in imported modules work** — if you set a breakpoint in `routes.ts`, VS Code stops there
+  when that module is imported and its code executes.
+- **Conditional breakpoints:** right-click a breakpoint → "Edit Breakpoint" → add a condition like
+  `req.method === "POST"`. The breakpoint only fires when the condition is true. Critical for debugging
+  routes that fire on every request.
+- **Logpoints:** right-click a breakpoint → "Edit Breakpoint" → select "Log Message." This prints a
+  message to the Debug Console without pausing execution. Like `console.log` but no code changes needed.
+- **Attach vs Launch:** `"request": "launch"` starts a new Node process. `"request": "attach"` connects
+  to an already-running process (e.g. a Docker container). Use attach when you can't or don't want to
+  launch from VS Code.
+- **`--inspect` port conflicts:** if port 9229 is in use, Node fails to start the inspector. Use
+  `--inspect=9229` explicitly or kill the conflicting process.
 
 ---
 
 # Lecture 54: Changing Variables in the Debug Console
 
-> Lecture content will be appended here after the learner provides their explanation.
+## What I learned
+- The **Debug Console** lets you evaluate arbitrary expressions and **mutate variables** while the
+  program is paused. This is "time travel" — you can test what would happen if a variable had a
+  different value, without restarting.
+
+### What you can do in the Debug Console
+
+**1. Inspect values:**
+- Type any expression and press Enter.
+- Examples: `req.url`, `req.headers["content-type"]`, `user.name`, `Buffer.concat(chunks).length`.
+- VS Code shows the result with full type information.
+
+**2. Mutate variables:**
+- Assign new values: `res.statusCode = 201` — changes the variable in the paused execution context.
+- Call functions: `res.end("forced response")` — actually executes code in the paused context.
+- This lets you "fix" a variable mid-execution to test downstream behavior without restarting.
+
+**3. Call functions:**
+- You can invoke any function in scope: `JSON.stringify({ test: true })`.
+- Be careful — side effects (like `res.end()`) happen immediately in the paused context.
+
+**4. Re-run expressions:**
+- Use `$_` to reference the *previous* result (e.g., if you typed `user.name` and got `"Alice"`, `$_`
+  is `"Alice"`).
+
+### The workflow for logical errors
+
+```text
+  1. Hit breakpoint at the decision point
+  2. Inspect variables in Debug Console
+  3. "What if I change this?"
+  4. Mutate the variable
+  5. Step over to see the effect
+  6. If correct → go back, fix the code, restart
+  7. If still wrong → inspect more, iterate
+```
+
+## TypeScript mapping
+- **The Debug Console uses the *runtime* type system.** VS Code can show inferred types from the TS
+  source, but the actual values are plain JS. You can assign a `string` to a `number` variable in the
+  Debug Console — TS won't stop you because you're bypassing the type system at runtime.
+- **This is both powerful and dangerous.** Changing `res.statusCode = "not-a-number"` in the Debug
+  Console will crash the response. Use it for exploration, not as a crutch.
+- **Watch expressions respect TypeScript types in the editor UI.** When you add `user.email` to Watch,
+  VS Code shows its type (`string | undefined` in strict mode).
+
+## Notes & gotchas
+- **Debug Console mutations are temporary.** They only affect the current paused execution. When you
+  continue or restart, the original code runs again.
+- **Side effects are real.** Calling `fs.writeFileSync(...)` in the Debug Console actually writes to
+  disk. Calling `res.end()` actually sends the response.
+- **`console.log` during debugging** — `console.log` output appears in the Debug Console or the
+  terminal, interleaved with your debugger output.
+- **The Debug Console is not a REPL.** It runs in the context of the paused execution, with access to
+  local variables. But it doesn't persist state between pauses.
+- **Expressions are evaluated in the current frame.** If you're paused inside `routeRequest`, you can
+  access `req`, `res`, `user` — but not variables from the calling function unless you select that
+  frame in the Call Stack.
 
 ---
 
 # Lecture 55: Wrap Up
 
-> Lecture content will be appended here after the learner provides their explanation.
+## What I learned
+- Section 4 is about **development experience** — the tools and workflows that make writing Node.js code
+  faster, safer, and less painful.
+- The section builds a complete **development toolkit** from npm scripts through the debugger.
+
+### Section 4 complete map
+
+| Lecture | Topic | Key Takeaway |
+|---|---|---|
+| 41 | Module Introduction | What Section 4 covers |
+| 42 | NPM Scripts | Command shortcuts, lifecycle hooks, PATH injection |
+| 43 | Installing 3rd Party Packages | `npm install`, `dependencies` vs `devDependencies`, lockfiles |
+| 44 | Global vs Core vs Third-Party | Three categories of Node features and how to access them |
+| 45 | Nodemon | Auto-restart on file changes for faster dev loops |
+| 46 | Global & Local Packages | Why local installs matter for reproducibility |
+| 47 | Error Types | Syntax, runtime, logical — three categories, three strategies |
+| 48 | Syntax Errors | `tsc --noEmit` catches them; read, fix, rerun |
+| 49 | Runtime Errors | `try/catch`, guards, process handlers |
+| 50 | Logical Errors | The hard ones — debugger, logging, tests |
+| 51 | Using the Debugger | Breakpoints, stepping, inspecting — the logical-error killer |
+| 52 | Auto-restart + Debugger | Nodemon + inspector for fast edit-debug cycles |
+| 53 | VS Code Debugging | `launch.json`, breakpoints, Debug Sidebar |
+| 54 | Debug Console | Inspect and mutate variables mid-execution |
+| 55 | Wrap Up | This lecture — consolidating the workflow |
+| 56 | Useful Resources & Links | Curated references for deeper dives |
+
+### The consolidated development workflow
+
+```text
+  1. Write code in .ts files
+  2. Run npm run lint (tsc --noEmit) — catch syntax/type errors
+  3. Run npm run dev (nodemon app.ts) — auto-restart on change
+  4. Attach debugger (VS Code F5) when logical errors appear
+  5. Use Debug Console to experiment with fixes
+  6. Fix code, let Nodemon restart, verify
+  7. Repeat
+```
+
+## TypeScript mapping
+- **`tsc --noEmit` is your compile-time safety net** (syntax + type errors).
+- **`try/catch` + guards are your runtime safety net** (runtime errors).
+- **The debugger is your semantic safety net** (logical errors).
+- **TypeScript eliminates an entire category of bugs** before they reach runtime. The remaining bugs are
+  harder but fewer.
+- **The native TS workflow (Node 24)** removes the build step entirely — `node app.ts` runs directly.
+  The same three-layer safety net applies, just with fewer moving parts.
+
+## Notes & gotchas
+- **Section 4 is about DX, not new language features.** Every concept maps back to JavaScript — the
+  TypeScript angle is about *strictness, types, and native execution*.
+- **The workflow is now muscle memory:** `lint` → `dev` → debug → fix → repeat.
+- **You don't need Nodemon to debug.** You can use `node --inspect app.ts` directly. Nodemon just
+  removes the manual restart between fixes.
+- **The debugger works with native TS.** No source maps needed for simple projects on Node 24.
+- **AI assistance (Lecture 56 adjacent):** AI tools can explain errors, suggest fixes, and generate
+  boilerplate — but they don't replace `tsc`, the debugger, or your understanding of the code.
 
 ---
 
 # Lecture 56: Useful Resources & Links
 
-> Lecture content will be appended here after the learner provides their explanation.
+## What I learned
+- Curated references for deeper dives into npm, Nodemon, debugging, and TypeScript.
+- These are **reference material**, not required reading for the course. Use them when you need
+  exact syntax, edge-case behavior, or deeper context.
+
+### npm & package management
+- **npm documentation:** https://docs.npmjs.com — scripts, install, semver, package.json spec.
+- **npm semver calculator:** https://semver.npmjs.com/ — understand version ranges like `^`, `~`, `>=`.
+- **npm package docs:** https://docs.npmjs.com/cli/v11/commands/npm-install — install flags,
+  `--save-dev`, `--global`, `--production`.
+
+### Nodemon
+- **Nodemon documentation:** https://nodemon.io — config options, CLI flags, programmatic API.
+- **Nodemon config reference:** https://github.com/remy/nodemon#config-files — `nodemon.json` schema.
+
+### Node.js debugging
+- **Node.js debugging guide:** https://nodejs.org/en/docs/guides/debugging-getting-started/ — inspector
+  protocol, `--inspect`, `--inspect-brk`.
+- **Node.js error handling:** https://nodejs.org/en/docs/guides/handling-unhandled-rejections-and-errors/ —
+  `uncaughtException`, `unhandledRejection`, graceful shutdown.
+- **Node.js events:** https://nodejs.org/api/events.html — `EventEmitter`, the foundation of Node's
+  event-driven architecture (ties back to Lecture 27).
+
+### Visual Studio Code
+- **VS Code Node debugging:** https://code.visualstudio.com/docs/nodejs/nodejs-debugging — `launch.json`,
+  attach vs launch, troubleshooting.
+- **VS Code debugging docs:** https://code.visualstudio.com/docs/editor/debugging — breakpoints,
+  conditional breakpoints, logpoints, watch expressions.
+
+### TypeScript
+- **TypeScript handbook:** https://www.typescriptlang.org/docs/handbook/ — strict mode, `verbatimModuleSyntax`,
+  `erasableSyntaxOnly`, type guards.
+- **TypeScript `tsconfig` reference:** https://www.typescriptlang.org/tsconfig/ — every compiler option
+  explained, including the strict family.
+- **TypeScript with Node.js:** https://www.typescriptlang.org/docs/handbook/modules/reference.md#nodenext —
+  `NodeNext` module resolution, `.ts` extensions, ESM interop.
+
+### AI-assisted debugging (the modern layer)
+- **AI is a multiplier, not a replacement.** It explains errors faster, suggests fixes, and generates
+  boilerplate — but you must still verify and understand.
+- **What AI is good at:** syntax/type error explanations, boilerplate `try/catch` generation,
+  suggesting test cases, interpreting stack traces.
+- **What AI is bad at:** understanding your business logic, knowing your API spec, inspecting runtime
+  state — these still require the debugger and your judgment.
+- **Practical combo:**
+  ```
+  tsc --noEmit fails
+      ↓
+  AI explains the TS error + suggests fix
+      ↓
+  You apply the fix, verify with tsc
+      ↓
+  Logical error remains?
+      ↓
+  Debugger (breakpoints + Debug Console)
+      ↓
+  AI helps interpret what you see in the debugger
+  ```
+- **Tools in this space:** GitHub Copilot (inline in VS Code), Cursor (AI-first editor), Aider
+  (terminal pair programmer), Sentry (runtime error tracking with AI-assisted grouping).
+
+### How to use these resources
+- **During the course:** references for deeper context when a topic interests you.
+- **After the course:** the official docs are the definitive source when you forget exact syntax or flags.
+- **Our README is the map** — these links are the terrain. The README tells you *what* to use; the docs
+  tell you *exactly how*.
+
+---
+
+# Section 4 Complete — Section 5 Preview
+
+> Lectures 41–56 documented. Section 4 covered:
+> - npm scripts and package management
+> - Global, core, and third-party modules
+> - Nodemon for auto-restarts
+> - Error types and debugging strategies
+> - The debugger in VS Code
+> - AI-assisted debugging as a modern complement
+>
+> Next: **Section 5** — [section topic to be added when learner provides lecture list]

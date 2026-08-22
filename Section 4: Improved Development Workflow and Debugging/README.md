@@ -328,7 +328,103 @@ npm start         # node app.ts   (or: node --watch app.ts for auto-restart)
 
 # Lecture 45: Using Nodemon for Autorestarts
 
-> Lecture content will be appended here after the learner provides their explanation.
+## What I learned
+- **Nodemon** is a CLI tool that watches your project files and automatically restarts the Node
+  process when a change is detected. It removes the manual `CTRL+C` → `npm start` loop from
+  development.
+- **Install as devDependency:**
+  ```bash
+  npm install -D nodemon
+  ```
+- **Use via npm script** (preferred) or `npx nodemon`:
+  ```json
+  "scripts": {
+    "start": "node app.ts",
+    "dev": "nodemon app.ts"
+  }
+  ```
+- **How it works:** Nodemon spawns your Node process as a child. When a watched file changes,
+  it kills the child and spawns a fresh one, piping stdout/stderr so you still see output.
+- **Default watched extensions:** `.js`, `.mjs`, `.json`, `.node`. For TypeScript projects, tell
+  Nodemon to watch `.ts` files via `nodemon.json` or rely on Node 24 native `.ts` support.
+
+### Nodemon lifecycle
+
+```text
+  Developer edits app.ts
+           │
+           ▼
+  ┌─────────────────┐
+  │  Nodemon detects  │
+  │  file change      │
+  └────────┬────────┘
+           │
+           ▼
+  ┌─────────────────┐
+  │  Kill old Node   │
+  │  process         │
+  └────────┬────────┘
+           │
+           ▼
+  ┌─────────────────┐
+  │  Spawn new Node  │
+  │  (node app.ts)   │
+  └────────┬────────┘
+           │
+           ▼
+  ┌─────────────────┐
+  │  Pipe output to  │
+  │  terminal        │
+  └─────────────────┘
+```
+
+### nodemon.json (TypeScript project)
+
+```json
+{
+  "watch": ["*.ts"],
+  "ext": "ts",
+  "ignore": ["node_modules/"],
+  "exec": "node app.ts"
+}
+```
+
+- `watch` — glob patterns to monitor.
+- `ext` — file extensions that trigger a restart.
+- `ignore` — paths to exclude (defaults already include `node_modules/`).
+- `exec` — the command to run on restart. On Node 24, `node app.ts` works natively.
+
+## TypeScript mapping
+- **Nodemon does not type-check.** It only restarts the process. `tsc --noEmit` (`npm run lint`)
+  is still the separate quality gate that catches type errors before runtime.
+- **Native TS execution on Node 24:** `nodemon app.ts` passes `.ts` directly to Node, which strips
+  types at runtime. No `ts-node`, no `tsx`, no build step required.
+- **The dev workflow split:**
+  - `npm run lint` → `tsc --noEmit` → type-check only, no execution.
+  - `npm run dev` → `nodemon app.ts` → executes, auto-restarts on change, but does not type-check.
+- **`import type` still enforced.** Even though Nodemon is restarting the process, the TypeScript
+  compiler (`tsc`) still enforces `verbatimModuleSyntax` and `erasableSyntaxOnly` during `lint`.
+- **No type definitions needed for Nodemon itself** when used purely as a CLI tool via npm scripts.
+  You never `import nodemon` in code, so `@types/nodemon` is unnecessary for our usage pattern.
+
+## Notes & gotchas
+- **Install as devDependency only.** `npm install -D nodemon` — never add it to `dependencies`.
+- **`npm start` vs `npm run dev`:** `start` runs `node app.ts` (no watcher). `dev` runs
+  `nodemon app.ts` (watches + restarts). Don't accidentally use `dev` in production.
+- **Nodemon forwards `SIGINT`.** `CTRL+C` kills the child Node process and then Nodemon itself exits
+  — graceful shutdown handlers from Lecture 28 still fire.
+- **Infinite restart loops:** if the restart itself changes a watched file (e.g. a logger writing to
+  a watched log file), Nodemon can loop. Use `ignore` in `nodemon.json` to exclude generated files.
+- **`node --watch` vs Nodemon:** Node 24 has a built-in `--watch` flag (`node --watch app.ts`).
+  It restarts on file changes without any external dependency. Nodemon offers more configuration
+  and broader compatibility across Node versions. Both are valid; the course teaches Nodemon.
+- **Don't run `tsc --watch` + Nodemon together** unless you understand the interaction. `tsc --watch`
+  only type-checks; it doesn't execute. Nodemon executes but doesn't type-check. Running both in
+  parallel can be confusing — prefer `npm run lint` manually, then `npm run dev` for the edit loop.
+- **Nodemon is not a debugger.** It restarts the process, but it doesn't attach a debugger or let
+  you inspect state. Lectures 51–54 cover actual debugging.
+- **`nodemon.json` is optional.** Without it, Nodemon uses sensible defaults. Add it only when you
+  need to customize watch patterns, the exec command, or delay.
 
 ---
 

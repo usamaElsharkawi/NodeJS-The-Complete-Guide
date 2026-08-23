@@ -398,6 +398,232 @@ Each middleware is a **typed building block**. TypeScript verifies that each pie
 
 ---
 
+# Lecture 60: Adding Middleware
+
+## What I learned
+- Middleware functions sit between the incoming request and your final route handler.
+- They receive `(req, res, next)`, can modify `req`/`res`, and either:
+  - Call `next()` to pass control to the next middleware/route
+  - Send a response themselves (short-circuiting the chain)
+
+```text
+Request → [Middleware 1] → [Middleware 2] → [Route Handler] → Response
+```
+
+### "Express.js is all about middleware"
+This is the core design philosophy. In Express, **everything is middleware**:
+- Route handlers (`app.get("/", handler)`) are middleware that match a specific method+path
+- `app.use()` registers general middleware for all methods/paths
+- `express.json()` is built-in middleware for body parsing
+- Even your final response is just the last middleware in the chain sending something
+
+The entire framework is a **middleware pipeline** — you stack functions, and Express runs them in order.
+
+### "Pluggable nature"
+Express is **pluggable** because you add/remove/reorder middleware without changing the framework itself. It's like LEGO blocks:
+
+```ts
+// Pick what you need, in any order
+app.use(logger);           // plug in logging
+app.use(express.json());   // plug in body parsing
+app.use(auth);             // plug in authentication
+app.get("/", handler);     // plug in routes
+```
+
+You're not locked into a rigid structure. You compose your server from independent, reusable pieces.
+
+### "Order matters"
+Express runs middleware **in the exact order you register it**:
+
+```ts
+// ❌ WRONG — auth runs AFTER the route
+app.get("/dashboard", dashboardHandler);
+app.use(auth);
+
+// ✅ CORRECT — auth runs BEFORE the route
+app.use(auth);
+app.get("/dashboard", dashboardHandler);
+```
+
+**Why order matters:**
+1. **Security** — auth must run before protected routes
+2. **Body parsing** — `express.json()` must run before routes that read `req.body`
+3. **404 handling** — must be **last** (catches everything unmatched)
+4. **Error handling** — must be **after** all routes/middleware
+
+```text
+Registration order:
+1. app.use(logger)          ← runs first
+2. app.use(express.json())  ← runs second
+3. app.use(auth)            ← runs third
+4. app.get("/", handler)    ← runs fourth (if path matches)
+5. app.use(404handler)      ← runs last (catches unmatched)
+```
+
+### Minimal example
+```ts
+import express, { Request, Response, NextFunction } from "express";
+
+const app = express();
+
+// Logger middleware
+const logger = (req: Request, res: Response, next: NextFunction): void => {
+  console.log(`${req.method} ${req.url}`);
+  next();
+};
+
+app.use(logger);
+
+// Route
+app.get("/", (req: Request, res: Response) => {
+  res.send("Hello!");
+});
+
+app.listen(3000);
+```
+
+## TypeScript mapping
+- `import express from "express"` (ESM default import, verbatimModuleSyntax)
+- Middleware signature: `(req: Request, res: Response, next: NextFunction) => void`
+- `NextFunction` is a type — represents "call the next middleware"
+- `app.use()` registers middleware for all paths/methods; `app.get()` for GET only
+- `res.send()` auto-sets Content-Type and calls `res.end()` — no hanging responses
+
+## Notes & gotchas
+- **Always call `next()`** if you want the request to continue — otherwise it hangs
+- **OR send a response** (`res.send()`, `res.end()`) — but not both
+- `app.use()` without a path matches **all paths**; `app.use("/api", ...)` matches only `/api/*`
+- Middleware is **function-based** — no classes needed
+- Error-handling middleware has 4 parameters: `(err, req, res, next) => void`
+
+---
+
+# Lecture 61: How Middleware Works
+
+## What I learned
+- Express internally maintains a **stack** of middleware/route handlers.
+- When a request arrives, Express iterates through this stack **in order of registration**.
+- For each middleware, Express calls it with `(req, res, next)` and decides what to do next.
+
+### The middleware execution flow
+1. Request arrives → Express creates `req`, `res`, `next` objects
+2. Express iterates through registered middleware in order
+3. For each middleware:
+   - Calls it with `(req, res, next)`
+   - If middleware calls `next()`, continue to next
+   - If middleware sends a response, stop (short-circuit)
+   - If middleware doesn't call `next()` or send response, request **hangs**
+
+### Two ways middleware ends
+A middleware function **must** do ONE of these:
+1. **Call `next()`** — pass control to the next middleware in the chain
+2. **Send a response** (`res.send()`, `res.end()`, `res.json()`, etc.) — end the request
+
+```ts
+// Option 1: Continue the chain
+const logger = (req, res, next) => {
+  console.log(`${req.method} ${req.url}`);
+  next(); // ← pass to next middleware
+};
+
+// Option 2: End the request (short-circuit)
+const auth = (req, res, next) => {
+  if (!req.headers.authorization) {
+    return res.status(401).send("Unauthorized"); // ← ends here
+  }
+  next(); // ← continue if authorized
+};
+```
+
+### What happens if you forget `next()`?
+If a middleware doesn't call `next()` and doesn't send a response, the request **hangs indefinitely** — the client waits forever.
+
+```ts
+// ❌ BAD — request hangs
+const brokenMiddleware = (req, res, next) => {
+  console.log("I run but never end or pass control");
+  // Missing: next() or res.send()
+};
+```
+
+### The internal stack
+Express stores middleware in an internal array (the "stack"):
+
+```ts
+// Internally, Express maintains something like:
+const stack = [
+  { handle: logger, path: "/" },
+  { handle: bodyParser, path: "/" },
+  { handle: auth, path: "/" },
+  { handle: dashboardHandler, method: "GET", path: "/dashboard" },
+  { handle: notFound, path: "/" }
+];
+```
+
+When a request comes in, Express iterates through this stack in order.
+
+### Middleware types in Express
+
+| Type | Registration | When it runs |
+|------|-------------|--------------|
+| **Application-level** | `app.use()` | Every request to the app |
+| **Route-level** | `app.get(path, fn)` | Only for GET requests to that path |
+| **Router-level** | `router.use()` | Only for requests matching the router |
+| **Error-handling** | `app.use((err, req, res, next) => ...)` | When `next(err)` is called |
+
+### The `next()` function can take an error
+```ts
+const errorHandler: express.ErrorRequestHandler = (err, req, res, next) => {
+  console.error(err);
+  res.status(500).send("Something went wrong!");
+};
+
+// Pass an error to skip to error handler
+app.use((req, res, next) => {
+  try {
+    // risky operation
+  } catch (err) {
+    next(err); // ← passes error to error handler
+  }
+});
+```
+
+### TypeScript mapping
+```ts
+import express, { Request, Response, NextFunction, RequestHandler, ErrorRequestHandler } from "express";
+
+// Standard middleware type
+const logger: RequestHandler = (req, res, next) => {
+  console.log(`${req.method} ${req.url}`);
+  next();
+};
+
+// Error-handling middleware (4 parameters!)
+const errorHandler: ErrorRequestHandler = (err, req, res, next) => {
+  console.error(err);
+  res.status(500).send("Server error");
+};
+
+const app = express();
+app.use(logger);           // RequestHandler
+app.use(errorHandler);     // ErrorRequestHandler
+```
+
+- `RequestHandler` = `(req, res, next) => void`
+- `ErrorRequestHandler` = `(err, req, res, next) => void` — **4 parameters** (Express detects this automatically)
+- `NextFunction` is a type — represents "call the next middleware"
+
+## Notes & gotchas
+- **Always call `next()`** if you want the request to continue — otherwise it hangs
+- **OR send a response** — but not both (double-send causes errors)
+- `app.use()` without a path matches **all paths**; `app.use("/api", ...)` matches only `/api/*`
+- Route handlers (`app.get()`, etc.) are middleware that also check the HTTP method
+- Error-handling middleware has **4 parameters** — Express automatically detects this signature
+- `next(err)` skips all remaining middleware and goes straight to error handlers
+- Middleware order is **critical** — think of it as a pipeline where order = execution order
+
+---
+
 # Lectures
 
 - 57. Module Introduction

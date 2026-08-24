@@ -1466,6 +1466,169 @@ app.use((req: Request, res: Response) => {
 
 ---
 
+# Lecture 68: Filtering Paths
+
+## What I learned
+- Middleware doesn't have to run for every request — `app.use("/path", middleware)` filters by path prefix.
+- This lets you apply middleware **only to specific sections** of your app (e.g., only `/api/*`, only `/admin/*`).
+- Path filtering works with both inline middleware and **routers**.
+
+### Path filtering with `app.use()`
+```ts
+import express, {
+  type Express,
+  type Request,
+  type Response,
+  type NextFunction,
+} from "express";
+
+const app: Express = express();
+
+// ✅ Logger ONLY for /api/* paths
+app.use("/api", (req: Request, _res: Response, next: NextFunction) => {
+  console.log(`[API] ${req.method} ${req.url}`);
+  next();
+});
+
+// ✅ Auth ONLY for /admin/* paths
+app.use("/admin", (req: Request, res: Response, next: NextFunction) => {
+  if (!req.headers.authorization) {
+    res.status(401).send("Unauthorized");
+    return;
+  }
+  next();
+});
+```
+
+### What gets matched?
+```text
+app.use("/api", middleware)
+
+Matches:
+  ✓ GET /api/users
+  ✓ POST /api/users
+  ✓ GET /api/users/123
+  ✓ DELETE /api/users/123
+
+Does NOT match:
+  ✗ GET /
+  ✗ GET /about
+  ✗ GET /products
+```
+
+### Method-specific filtering
+```ts
+// Only POST /login runs this
+app.post("/login", loginValidation);
+
+// Only GET /products runs this
+app.get("/products", productsLogger);
+```
+
+### Filtering with routers
+
+#### 1. Filter when mounting the router
+```ts
+// app.ts
+app.use("/admin", adminRoutes);  // only /admin/* reaches adminRoutes
+app.use("/shop", shopRoutes);    // only /shop/* reaches shopRoutes
+app.use("/api", apiRouter);      // only /api/* reaches apiRouter
+```
+
+#### 2. Filter inside the router with `router.use()`
+```ts
+// routes/admin.ts
+import { Router, type Request, type Response, type NextFunction } from "express";
+
+const router = Router();
+
+// This middleware only runs for requests that reached this router
+router.use((req: Request, res: Response, next: NextFunction) => {
+  console.log("Admin request:", req.url);
+  next();
+});
+
+router.get("/", (_req: Request, res: Response) => {
+  res.send("Admin dashboard");
+});
+
+export default router;
+```
+
+#### 3. Combined — nested path filtering
+```ts
+// app.ts
+app.use("/admin", adminRoutes);       // outer filter
+
+// routes/admin.ts
+router.use("/users", usersSubRouter); // inner filter
+// Result: /admin/users/* only
+```
+
+### Real example with your code structure
+```ts
+// app.ts
+app.use("/admin", adminRoutes);
+app.use("/shop", shopRoutes);
+
+// Log only /admin/* requests
+app.use("/admin", (req: Request, res: Response, next: NextFunction) => {
+  console.log(`[ADMIN] ${req.method} ${req.url}`);
+  next();
+});
+
+// Log only /shop/* requests
+app.use("/shop", (req: Request, res: Response, next: NextFunction) => {
+  console.log(`[SHOP] ${req.method} ${req.url}`);
+  next();
+});
+```
+
+### Architecture diagram
+```text
+/app.ts
+├── app.use("/admin", adminRoutes)  ← outer path filter
+│   └── routes/admin.ts
+│       ├── router.use(logger)      ← inner middleware
+│       ├── router.get("/", ...)    ← matches GET /admin
+│       └── router.get("/users",...) ← matches GET /admin/users
+│
+├── app.use("/shop", shopRoutes)    ← outer path filter
+│   └── routes/shop.ts
+│       ├── router.get("/", ...)    ← matches GET /shop
+│       └── router.get("/products",...) ← matches GET /shop/products
+│
+└── app.use((req, res) => { ... })  ← 404 catch-all
+```
+
+### TypeScript mapping
+```ts
+import { type RequestHandler } from "express";
+
+// Path filtering with app.use(path, middleware)
+const apiLogger: RequestHandler = (req, res, next) => {
+  console.log(`[API] ${req.method} ${req.url}`);
+  next();
+};
+
+app.use("/api", apiLogger);  // only runs for /api/* paths
+
+// Router-level filtering
+const router = Router();
+
+router.use("/users", usersSubRouter);  // only /users/* inside this router
+```
+
+### Notes & gotchas
+- `app.use("/api", fn)` matches `/api`, `/api/`, `/api/users`, `/api/users/123` — **all sub-paths**
+- `app.use("/api/", fn)` also works — trailing slash doesn't affect matching
+- For **exact** path matching without sub-paths, use `app.get("/api", fn)` instead
+- Path filtering with `app.use()` is about **mounting middleware at a path prefix**, not about route matching
+- Middleware order is **global** — `app.use("/api", a)` before `app.use("/api", b)` means `a` runs first
+- The 404 handler should be a **bare `app.use((req, res) => { ... })`** without a path to catch everything unmatched
+
+---
+
 # Lectures
 
 - 57. Module Introduction

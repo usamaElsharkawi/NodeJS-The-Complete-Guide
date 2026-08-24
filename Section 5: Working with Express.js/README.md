@@ -817,6 +817,212 @@ app.param(name, fn);
 
 ---
 
+# Lecture 63: Handling Different Routes
+
+## What I learned
+- Route-specific methods (`app.get()`, `app.post()`, `app.put()`, `app.delete()`) match **both** the path AND the HTTP method.
+- `app.use()` matches all HTTP methods on a path — useful for middleware, not for differentiating routes.
+- Route parameters (`:param`) capture values from the URL segment automatically.
+- Route order matters — specific routes must come before parameterized routes.
+
+### Basic route handling
+```ts
+import express, {
+  type Express,
+  type Request,
+  type Response,
+} from "express";
+
+const app: Express = express();
+
+// GET / → show home page
+app.get("/", (_req: Request, res: Response) => {
+  res.send("Welcome to the home page!");
+});
+
+// POST /contact → handle form submission
+app.post("/contact", (_req: Request, res: Response) => {
+  res.send("Message sent!");
+});
+```
+
+### The key difference: `app.get()` vs `app.use()`
+
+```ts
+// ❌ app.use — matches ALL HTTP methods
+app.use("/our-product", (req, res, next) => {
+  res.send("Matches GET, POST, PUT, DELETE...");
+});
+
+// ✅ app.get — matches ONLY GET
+app.get("/our-product", (req: Request, res: Response) => {
+  res.send("Only matches GET requests to /our-product");
+});
+
+// ✅ app.post — matches ONLY POST
+app.post("/our-product", (req: Request, res: Response) => {
+  res.send("Only matches POST requests to /our-product");
+});
+```
+
+### Route parameters
+Dynamic routes use `:param`:
+
+```ts
+// GET /user/:id
+app.get("/user/:id", (req: Request, res: Response) => {
+  const userId = req.params.id ?? "unknown";
+  res.send(`User ID: ${userId}`);
+});
+```
+
+Examples:
+- `GET /user/123` → "User ID: 123"
+- `GET /user/abc` → "User ID: abc"
+
+### Multiple route parameters
+```ts
+// GET /user/:userId/post/:postId
+app.get("/user/:userId/post/:postId", (req: Request, res: Response) => {
+  const userId = req.params.userId ?? "unknown";
+  const postId = req.params.postId ?? "unknown";
+  res.send(`User ${userId}, Post ${postId}`);
+});
+```
+
+### Route matching order — CRITICAL
+**Order matters!** Express runs routes in the order you define them:
+
+```ts
+// ❌ Wrong order — catches /user/profile before the specific route
+app.get("/user/:id", (req, res) => {
+  res.send("Generic user page");
+});
+
+app.get("/user/profile", (req, res) => {
+  res.send("User profile");  // NEVER reached!
+});
+
+// ✅ Correct order — specific routes first
+app.get("/user/profile", (req, res) => {
+  res.send("User profile");
+});
+
+app.get("/user/:id", (req, res) => {
+  res.send("Generic user page");
+});
+```
+
+### What changed from Section 3 (raw Node.js)?
+
+```ts
+// Section 3 (raw Node) — manual routing with if/else
+const server = http.createServer((req: IncomingMessage, res: ServerResponse) => {
+  const url = new URL(req.url ?? "", "http://localhost");
+  const pathname = url.pathname;
+
+  if (path === "/" && method === "GET") { ... }
+  else if (path === "/about" && method === "GET") { ... }
+  else if (path === "/" && method === "POST") { ... }
+  else { res.statusCode = 404; res.end("Not Found"); }
+});
+```
+
+```ts
+// Section 5 (Express) — declarative routing
+app.get("/", (req, res) => { res.send("Home"); });
+app.get("/about", (req, res) => { res.send("About"); });
+app.post("/", (req, res) => { res.send("Posted"); });
+```
+
+### Middleware vs Routes
+```ts
+// Middleware — runs for ALL methods
+app.use("/api", (req, res, next) => {
+  console.log("Runs for GET/POST/PUT/DELETE on /api/*");
+  next();  // MUST call next() to continue
+});
+
+// Route — runs ONLY for GET
+app.get("/api/users", (req, res) => {
+  res.send("Get all users");  // Ends response — no next() needed
+});
+
+// Route — runs ONLY for POST
+app.post("/api/users", (req, res) => {
+  res.send("Create a user");
+});
+```
+
+### TypeScript mapping
+```ts
+import express, {
+  type Express,
+  type Request,
+  type Response,
+} from "express";
+
+const app: Express = express();
+
+// Route handlers are typed
+app.get("/", (_req: Request, res: Response) => {
+  res.send("Hello");
+});
+
+// Route params are typed via ParamsDictionary
+app.get("/user/:id", (req: Request, res: Response) => {
+  // req.params is Record<string, string> — may be undefined with strict indexing
+  const id = req.params.id ?? "unknown";
+  res.send(`User: ${id}`);
+});
+
+// POST handler
+app.post("/api/users", (req: Request, res: Response) => {
+  // req.body needs express.json() or express.urlencoded() middleware
+  // req.body is typed as 'any' by default — validate manually
+  res.json({ received: true });
+});
+```
+
+### Updated code (your app.ts)
+```ts
+import express, {
+  type Express,
+  type Request,
+  type Response,
+  type NextFunction,
+} from "express";
+
+const app: Express = express();
+
+// Logger middleware — runs for everything
+app.use("/", (req: Request, res: Response, next: NextFunction) => {
+  console.log(`${req.method} ${req.url}`);
+  next();
+});
+
+// Specific route handlers (method-specific)
+app.get("/", (_req: Request, res: Response) => {
+  res.send("<h1>Home</h1><p>I am a software engineer</p>");
+});
+
+app.get("/our-product", (_req: Request, res: Response) => {
+  res.send("<h1>Our Product</h1><p>I am a Product manager</p>");
+});
+
+app.listen(3000);
+```
+
+## Notes & gotchas
+- **Use `app.get()`, `app.post()` for routes** — not `app.use()` (which matches all methods)
+- **Order matters** — specific routes before parameterized routes (`/user/profile` before `/user/:id`)
+- **`res.send()` ends the response** — no need for `res.end()` or `next()` in routes
+- **Route params are strings** — parse to number if needed: `parseInt(req.params.id, 10)`
+- **Middleware must call `next()`** to continue — forgetting it hangs the request
+- **Under strict TypeScript**, `req.params.id` may be `string | undefined` — always null-check with `??` default
+
+---
+
 # Lectures
 
 - 57. Module Introduction

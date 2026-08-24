@@ -1629,6 +1629,224 @@ router.use("/users", usersSubRouter);  // only /users/* inside this router
 
 ---
 
+# Lectures 69–71: Creating, Serving, and 404-ing HTML Pages
+
+These three lectures form a logical progression: **create HTML files → serve them with `path.join()` + `res.sendFile()` → handle missing pages with a 404 fallback**.
+
+---
+
+## Lecture 69: Creating HTML Pages
+
+### What I learned
+- Instead of embedding HTML strings inside route handlers, you create separate `.html` files in a `views/` folder.
+- This keeps route handlers clean and separates concerns (logic vs markup).
+
+### Directory structure
+```text
+Section 5/
+├── app.ts
+├── routes/
+│   ├── admin.ts
+│   └── shop.ts
+└── views/
+    ├── index.html
+    ├── about.html
+    └── 404.html
+```
+
+### Example `views/index.html`
+```html
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Home</title>
+</head>
+<body>
+  <h1>Welcome Home</h1>
+  <p>I am a software engineer</p>
+  <nav>
+    <a href="/">Home</a>
+    <a href="/about">About</a>
+    <a href="/shop">Shop</a>
+  </nav>
+</body>
+</html>
+```
+
+---
+
+## Lecture 70: Serving HTML Pages
+
+### What I learned
+- Use `path.join()` to build OS-agnostic file paths.
+- Use `res.sendFile()` to read a file from disk and send it with the correct `Content-Type` header automatically.
+
+### The instructor's preferred pattern
+```ts
+import path from "node:path";
+import express, {
+  type Express,
+  type Request,
+  type Response,
+} from "express";
+
+const app: Express = express();
+
+app.get("/", (_req: Request, res: Response) => {
+  // path.join() normalizes separators across OSes
+  const filePath = path.join(process.cwd(), "views", "index.html");
+  // res.sendFile() streams the file and sets Content-Type automatically
+  res.sendFile(filePath);
+});
+
+app.get("/about", (_req: Request, res: Response) => {
+  const filePath = path.join(process.cwd(), "views", "about.html");
+  res.sendFile(filePath);
+});
+```
+
+### Why `path.join()` instead of string concatenation?
+```ts
+// ❌ Bad — hardcoded separators, breaks on Windows
+const filePath = "./views/index.html";
+
+// ✅ Good — OS-agnostic
+const filePath = path.join(process.cwd(), "views", "index.html");
+// Windows: "C:\Users\...\views\index.html"
+// Linux:   "/home/.../views/index.html"
+```
+
+### Why `res.sendFile()` instead of `fs.readFile()`?
+```ts
+// ❌ Manual — you handle headers, buffers, and errors
+fs.readFile("./views/index.html", (err, data) => {
+  if (err) return res.status(500).send("Error");
+  res.setHeader("Content-Type", "text/html");
+  res.send(data);
+});
+
+// ✅ Express handles everything — headers, streaming, errors
+res.sendFile(path.join(process.cwd(), "views", "index.html"));
+```
+
+`res.sendFile()`:
+- Sets `Content-Type` based on file extension (`.html` → `text/html`)
+- Streams the file efficiently (doesn't load the entire file into memory)
+- Sends 404 automatically if the file is missing
+- Sends 500 on other I/O errors
+
+### TypeScript mapping
+```ts
+import path from "node:path";
+
+// path.join() accepts string segments and returns string
+const filePath: string = path.join(process.cwd(), "views", "index.html");
+
+// res.sendFile() accepts an absolute path string
+res.sendFile(filePath);
+```
+
+### Notes & gotchas
+- **`process.cwd()`** is the directory where you ran `node app.ts` — use it as the base for relative paths
+- **`res.sendFile()` requires an absolute path** — `path.join(process.cwd(), ...)` ensures this
+- **`fs.readFile` is async** — if you do use it, never use `readFileSync` in route handlers (blocks the event loop)
+- **Security** — never use unsanitized user input inside `path.join()` for `sendFile()` (directory traversal risk)
+
+---
+
+## Lecture 71: Returning a 404 Page
+
+### What I learned
+- When a user visits a URL that doesn't match any route, Express falls through to `finalhandler`, which sends a default 404.
+- You can override this with a custom 404 HTML page served via `res.sendFile()`.
+
+### The pattern
+```ts
+import express, {
+  type Express,
+  type Request,
+  type Response,
+} from "express";
+import path from "node:path";
+
+const app: Express = express();
+
+// ... all your routes first ...
+
+// ✅ 404 fallback — MUST be LAST
+app.use((_req: Request, res: Response) => {
+  res.status(404).sendFile(path.join(process.cwd(), "views", "404.html"));
+});
+```
+
+### Key points
+1. **Must be placed AFTER all routes** — middleware order is critical
+2. **Use `app.use()` without a path** — catches all HTTP methods and unmatched paths
+3. **Don't call `next()`** — this is the final catch-all
+4. **`res.status(404)`** sets the status code before sending the file
+
+### Complete example tying 69–71 together
+```ts
+import express, {
+  type Express,
+  type Request,
+  type Response,
+} from "express";
+import path from "node:path";
+import adminRoutes from "./routes/admin.ts";
+import shopRoutes from "./routes/shop.ts";
+
+const app: Express = express();
+
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
+app.use("/admin", adminRoutes);
+app.use("/shop", shopRoutes);
+
+// HTML page routes
+app.get("/", (_req: Request, res: Response) => {
+  res.sendFile(path.join(process.cwd(), "views", "index.html"));
+});
+
+app.get("/about", (_req: Request, res: Response) => {
+  res.sendFile(path.join(process.cwd(), "views", "about.html"));
+});
+
+app.get("/shop", (_req: Request, res: Response) => {
+  res.sendFile(path.join(process.cwd(), "views", "shop.html"));
+});
+
+// 404 handler — MUST be last
+app.use((_req: Request, res: Response) => {
+  res.status(404).sendFile(path.join(process.cwd(), "views", "404.html"));
+});
+
+app.listen(3000);
+```
+
+### TypeScript mapping
+```ts
+// 404 handler — note: no next parameter (it's the final handler)
+app.use((_req: Request, res: Response) => {
+  res.status(404).sendFile(path.join(process.cwd(), "views", "404.html"));
+});
+```
+
+- 404 handler is a `RequestHandler` without `nextFunction`
+- `res.status(404)` sets the status code (typed as `number`)
+- `res.sendFile()` accepts a string path and streams the file
+
+### Notes & gotchas
+- **The 404 handler catches everything unmatched** — place it after all routes
+- **`res.sendFile()` sends 404 automatically** if the file doesn't exist, but explicitly setting `res.status(404)` makes the intent clear
+- **For specific 404s** (e.g., only certain paths), use `app.use("/specific-path", ...)`
+- **Always check route order** — a parameterized route like `/user/:id` will catch `/user/profile` if defined first
+- **`path.join(process.cwd(), "views", "404.html")`** must be an absolute path for `res.sendFile()`
+
+---
+
 # Lectures
 
 - 57. Module Introduction

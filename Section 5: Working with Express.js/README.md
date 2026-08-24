@@ -1847,6 +1847,105 @@ app.use((_req: Request, res: Response) => {
 
 ---
 
+# Lecture 73: Using a Helper Function for Navigation
+
+## What I learned
+- Repeating `path.join(process.cwd(), "views", ...)` in every route is **not DRY** (Don't Repeat Yourself).
+- Extract the path-building logic into a **helper function** so there's a single source of truth.
+- The instructor also hinted at resolving the views directory from the file location rather than relying on `process.cwd()` alone.
+
+### The problem: repeated path logic
+```ts
+app.get("/", (_req, res) => {
+  res.sendFile(path.join(process.cwd(), "views", "index.html"));
+});
+
+app.get("/about", (_req, res) => {
+  res.sendFile(path.join(process.cwd(), "views", "about.html"));
+});
+
+app.get("/shop", (_req, res) => {
+  res.sendFile(path.join(process.cwd(), "views", "shop.html"));
+});
+```
+
+### The solution: helper function
+```ts
+import path from "node:path";
+
+// Single source of truth for the views folder
+const getViewPath = (fileName: string): string => {
+  return path.join(process.cwd(), "views", fileName);
+};
+```
+
+Now routes are clean:
+```ts
+app.get("/", (_req, res) => {
+  res.sendFile(getViewPath("index.html"));
+});
+
+app.get("/about", (_req, res) => {
+  res.sendFile(getViewPath("about.html"));
+});
+
+app.get("/shop", (_req, res) => {
+  res.sendFile(getViewPath("shop.html"));
+});
+```
+
+### Lecture 72 hint: getting the base directory
+
+The hint in Lecture 72 was about resolving the directory this file lives in:
+
+```ts
+// CommonJS-style hint shown in the lecture
+module.exports = path.dirname(process.mainModule.filename);
+```
+
+In our ESM + native TypeScript setup, the equivalent is:
+
+```ts
+import path from "node:path";
+
+const __dirname = path.dirname(new URL(import.meta.url).pathname);
+
+const getViewPath = (fileName: string): string => {
+  return path.join(__dirname, "views", fileName);
+};
+```
+
+### Why avoid `process.cwd()` alone?
+- `process.cwd()` is where you **ran** `node app.ts`
+- If you run from another folder, the path breaks:
+  - `cd /tmp && node /home/project/app.ts`
+  - `process.cwd()` → `/tmp`
+  - But `new URL(import.meta.url).pathname` still points to `/home/project/app.ts`
+
+### TypeScript mapping
+```ts
+import path from "node:path";
+
+// ESM way to get directory of current file
+const __dirname: string = path.dirname(new URL(import.meta.url).pathname);
+
+const getViewPath = (fileName: string): string => {
+  return path.join(__dirname, "views", fileName);
+};
+
+app.get("/", (_req: Request, res: Response) => {
+  res.sendFile(getViewPath("index.html"));
+});
+```
+
+### Notes & gotchas
+- Keep path construction in **one place** — easier to refactor later
+- `new URL(import.meta.url).pathname` may include a leading `/` on Linux/macOS; `path.join()` still works
+- `res.sendFile()` still requires an **absolute path**
+- If you later add a `dist/` build step, recompute `__dirname` from the built file location
+
+---
+
 # Lectures
 
 - 57. Module Introduction

@@ -1226,6 +1226,244 @@ app.post("/api/data", (req: Request, res: Response) => {
 - **Body size limit** — body-parser has a default 100kb limit (configurable via `limit` option)
 - **Always call `res.send()` or `res.json()`** — not `res.end()` in routes (res.send handles it)
 
+## What `Router()` returns
+`Router()` returns a **Router instance** — a mini Express app with its own:
+- Route methods (`.get()`, `.post()`, `.put()`, `.delete()`)
+- Middleware methods (`.use()`)
+- Its own internal middleware stack
+
+The Router is simultaneously:
+1. A **function** `(req, res, next) => void` — valid for `app.use()`
+2. An **object** with routing methods — for defining routes
+
+```text
+┌─────────────────────────────────────┐
+│  const router = Router()            │
+│                                     │
+│  router = function(req,res,next){   │  ← a function (valid middleware)
+│    router.handle(req,res,next)      │
+│  }                                  │
+│                                     │
+│  router.get()  ← mixin             │  ← object with methods
+│  router.post() ← mixin             │
+│  router.use()  ← mixin             │
+│  router.stack  = []                │  ← owns its middleware stack
+└─────────────────────────────────────┘
+```
+
+---
+
+# Lecture 66: Using Express Router
+
+## What I learned
+- As the app grows, `app.ts` becomes unwieldy with many routes.
+- `express.Router()` lets you **split routes into separate modules** for separation of concerns.
+
+### The problem
+```ts
+// app.ts — getting unwieldy
+app.get("/", homeHandler);
+app.get("/about", aboutHandler);
+app.get("/products", productsHandler);
+app.post("/products", createProductHandler);
+// ... 50 more routes...
+```
+
+### The solution: Express Router
+```text
+app.ts (main entry point)
+├── routes/shop.ts     (shop routes)
+├── routes/admin.ts    (admin routes)
+└── routes/api.ts      (API routes)
+```
+
+### Creating a router (`routes/shop.ts`)
+```ts
+import { Router, type Request, type Response } from "express";
+
+const router = Router();
+
+router.get("/", (_req: Request, res: Response) => {
+  res.send("Shop home");
+});
+
+router.get("/products", (_req: Request, res: Response) => {
+  res.send("Product list");
+});
+
+router.get("/products/:id", (req: Request, res: Response) => {
+  const productId = req.params.id ?? "unknown";
+  res.send(`Product ${productId}`);
+});
+
+export default router;
+```
+
+### Mounting routers in `app.ts`
+```ts
+import express, { type Express } from "express";
+import shopRouter from "./routes/shop.ts";
+import adminRouter from "./routes/admin.ts";
+
+const app: Express = express();
+
+// Mount at base paths
+app.use("/shop", shopRouter);    // /shop/* routes
+app.use("/admin", adminRouter);  // /admin/* routes
+
+app.listen(3000);
+```
+
+Now:
+- `GET /shop/products` → matches `router.get("/products")`
+- `GET /admin/users` → matches `router.get("/users")`
+
+### TypeScript mapping
+```ts
+import { Router, type Request, type Response } from "express";
+
+const router = Router();
+
+// Router has same method signatures as Express app
+router.get("/", (_req: Request, res: Response) => { ... });
+router.post("/", (_req: Request, res: Response) => { ... });
+router.use(middleware);
+
+export default router;
+```
+
+### Why use Router?
+- **Separation of concerns** — shop routes in one file, admin in another
+- **Reusability** — same router can be mounted at different paths
+- **Maintainability** — easier to find/modify specific routes
+- **Team collaboration** — different devs work on different routers
+
+### Notes & gotchas
+- Router files typically `export default router`
+- Mount with `app.use("/prefix", router)` — prefix prepends to all router routes
+- **Middleware before `app.use(router)` still runs first** for all routes in that router
+- Router can have its own `.use()` middleware that only applies to its routes
+
+---
+
+# Lecture 67: Adding a 404 Error Page
+
+## What I learned
+- When a request doesn't match any route handler, Express falls through to `finalhandler` (internal module) which sends a **default bare 404 response**.
+- You can override this with a **custom 404 middleware** placed **after all routes**.
+
+### The 404 fallback middleware
+```ts
+import express, {
+  type Express,
+  type Request,
+  type Response,
+} from "express";
+
+const app: Express = express();
+
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
+// All your routes FIRST
+app.get("/", (_req: Request, res: Response) => {
+  res.send("<h1>Home</h1>");
+});
+
+app.get("/about", (_req: Request, res: Response) => {
+  res.send("<h1>About</h1>");
+});
+
+// ✅ 404 fallback — MUST be LAST
+app.use((_req: Request, res: Response) => {
+  res.status(404).send("<h1>404 - Page Not Found!</h1>");
+});
+
+app.listen(3000);
+```
+
+### Key points
+1. **Must be placed AFTER all routes** — middleware order is critical
+2. **Use `app.use()`** (not `app.get()`) — catches all HTTP methods
+3. **Don't call `next()`** — this is the final catch-all
+4. **Set status code** — `res.status(404)` before sending
+
+### Code review of current `app.ts`
+
+Issues found:
+
+1. **Parameter order swapped in 404 handler:**
+```ts
+// ❌ Wrong — req and res are swapped
+app.use("/",(res:Response,req:Request)=>{ ... })
+
+// ✅ Correct — (req, res) order
+app.use((req: Request, res: Response) => {
+  res.status(404).send("<h1>Page Not Found 404</h1>");
+});
+```
+
+2. **Redundant path "/" on 404 handler** — `app.use("/")` is the same as `app.use()` for a catch-all.
+
+3. **Unused `http` import:**
+```ts
+import http from "node:http";  // ❌ not used anywhere
+```
+
+### Issues in `routes/admin.ts`:
+
+1. **Duplicate imports:**
+```ts
+// ❌ Two imports from express
+import express, { type Request, type Response, type NextFunction } from "express";
+import { Router } from "express";
+```
+
+2. **Unused `NextFunction` in route handlers** — `next` is not called in the handlers.
+
+### Corrected `app.ts`:
+```ts
+import express, {
+  type Express,
+  type Request,
+  type Response,
+} from "express";
+import adminRoutes from "./routes/admin.ts";
+import shopRoutes from "./routes/shop.ts";
+
+const app: Express = express();
+
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
+app.use("/admin", adminRoutes);
+app.use("/shop", shopRoutes);
+
+app.use((req: Request, res: Response) => {
+  res.status(404).send("<h1>Page Not Found 404</h1>");
+});
+
+app.listen(3000);
+```
+
+### TypeScript mapping
+```ts
+// 404 handler — note: NO next parameter (it's the final handler)
+app.use((req: Request, res: Response) => {
+  res.status(404).send("...");
+});
+```
+
+- 404 handler is a `RequestHandler` without `nextFunction` — it's the last resort
+- `res.status(404)` sets the status code (typed as `number`)
+- `res.send()` accepts `string | Buffer | object`
+
+### Notes & gotchas
+- The 404 handler catches **everything unmatched** — place it after all routes
+- For **specific** 404s (e.g., only certain paths), use `app.use("/specific-path", ...)`
+- You can render an HTML page instead of plain text: `res.status(404).render("404")`
+- **Always check route order** — a parameterized route like `/user/:id` will catch `/user/profile` if defined first
+
 ---
 
 # Lectures

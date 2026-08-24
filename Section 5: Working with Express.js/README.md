@@ -624,6 +624,199 @@ app.use(errorHandler);     // ErrorRequestHandler
 
 ---
 
+# Lecture 62: Express.js — Looking Behind the Scenes
+
+## What I learned
+- I examined the actual Express.js source code on GitHub (`expressjs/express`) to understand the internals.
+- The entire framework lives in **~630 lines** across 5 files in `lib/`:
+  - `express.js` (81 lines) — entry point, creates the app
+  - `application.js` (631 lines) — core app logic, routing, middleware
+  - `request.js` — extends Node's IncomingMessage
+  - `response.js` — extends Node's ServerResponse
+  - `view.js` — template engine support
+  - `utils.js` — helpers
+
+### The big reveal: `app` is a function
+In `lib/express.js`, the `createApplication()` function creates something clever:
+
+```js
+function createApplication() {
+  var app = function(req, res, next) {
+    app.handle(req, res, next);  // ← app IS a function (valid request handler)
+  };
+
+  mixin(app, EventEmitter.prototype, false);  // add .on(), .emit()
+  mixin(app, proto, false);                    // add .get(), .use(), .listen()
+
+  return app;
+}
+```
+
+**The `app` is simultaneously:**
+1. A **function** `(req, res, next) => void` — valid Node.js request handler
+2. An **object** with methods — `.get()`, `.use()`, `.listen()`, `.set()`, etc.
+
+This is why both work:
+```ts
+app.listen(3000);                          // Express's built-in server
+http.createServer(app).listen(3000);       // Node's raw server — app IS a handler
+```
+
+### The request lifecycle in the source
+From `application.js`, the `app.handle()` method does:
+
+```js
+app.handle = function handle(req, res, callback) {
+  // 1. Create finalhandler (default error handler)
+  var done = callback || finalhandler(req, res, { env: this.get('env'), ... });
+
+  // 2. Set X-Powered-By header
+  if (this.enabled('x-powered-by')) res.setHeader('X-Powered-By', 'Express');
+
+  // 3. Create circular references
+  req.res = res; res.req = req;
+
+  // 4. ALTER THE PROTOTYPES — this is the "magic"
+  Object.setPrototypeOf(req, this.request);   // add Express methods to req
+  Object.setPrototypeOf(res, this.response);  // add Express methods to res
+
+  // 5. Setup locals
+  if (!res.locals) res.locals = Object.create(null);
+
+  // 6. Delegate to the Router
+  this.router.handle(req, res, done);
+};
+```
+
+### Key insights from the source
+
+#### 1. Prototype mutation
+Express doesn't create new `req`/`res` objects. It **mutates the prototypes** of Node's native objects to add Express-specific methods (like `req.body`, `res.send()`, `res.json()`):
+
+```ts
+// What Express does under the hood:
+Object.setPrototypeOf(req, app.request);   // adds methods
+Object.setPrototypeOf(res, app.response);  // adds methods
+```
+
+This is why `req.body` works even though Node's `IncomingMessage` doesn't have it — Express adds it via prototype chain + middleware (like `express.json()`).
+
+#### 2. The Router is separate
+The `app` delegates routing to a separate `Router` instance (from the `router` npm package):
+
+```js
+Object.defineProperty(this, 'router', {
+  get: function() {
+    if (router === null) {
+      router = new Router({ /* options */ });
+    }
+    return router;
+  }
+});
+```
+
+When you call `app.get("/", handler)`, Express:
+1. Gets the internal `Router`
+2. Creates a `Route` for `"/"`
+3. Adds `handler` to that route's middleware stack
+4. Returns `app` for chaining
+
+#### 3. `app.listen()` wraps `http.createServer()`
+```js
+app.listen = function listen() {
+  var server = http.createServer(this)  // ← `this` is the app function!
+  return server.listen.apply(server, arguments);
+};
+```
+
+This confirms: `app.listen()` just creates a Node HTTP server with `app` as the callback.
+
+#### 4. Middleware is just a stack
+`app.use()` flattens arguments and pushes functions into the router's stack:
+
+```js
+app.use = function use(fn) {
+  var fns = flatten.call(slice.call(arguments, offset), Infinity);
+  fns.forEach(function (fn) {
+    router.use(path, fn);  // ← just adds to the router's stack
+  });
+};
+```
+
+### Architecture diagram
+```text
+┌─────────────────────────────────────────────────────────────┐
+│  express() creates app                                      │
+│                                                             │
+│  app = function(req, res, next) {                           │
+│    app.handle(req, res, next);  ← app IS a function         │
+│  }                                                          │
+│                                                             │
+│  // Mixin methods from application.js prototype:            │
+│  app.get()       ← routing                                  │
+│  app.post()      ← routing                                  │
+│  app.use()       ← middleware                               │
+│  app.listen()    ← starts HTTP server                       │
+│  app.set()       ← settings                                 │
+│  app.param()     ← route params                             │
+└─────────────────────────────────────────────────────────────┘
+            │
+            ▼
+┌─────────────────────────────────────────────────────────────┐
+│  app.handle(req, res, done)                                 │
+│                                                             │
+│  1. Set X-Powered-By: Express                              │
+│  2. req.res = res, res.req = req (circular refs)           │
+│  3. Object.setPrototypeOf(req, app.request)  ← adds methods │
+│  4. Object.setPrototypeOf(res, app.response) ← adds methods │
+│  5. res.locals = {}                                         │
+│  6. this.router.handle(req, res, done) ← delegate to router │
+└─────────────────────────────────────────────────────────────┘
+            │
+            ▼
+┌─────────────────────────────────────────────────────────────┐
+│  Router.handle(req, res, done)                              │
+│                                                             │
+│  Iterates through the middleware stack:                     │
+│  for each layer in stack:                                   │
+│    - Match path/method                                      │
+│    - Call layer.handle(req, res, next)                      │
+│    - If next() called → continue to next layer             │
+│    - If response sent → stop                                │
+│    - If no match → continue                                 │
+│  If nothing matches → call done() (finalhandler)            │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### TypeScript mapping
+```ts
+import express, { Request, Response, NextFunction } from "express";
+
+// The app is a function that Node's http.createServer can use
+const app = express();
+
+// But it also has ALL these methods mixed in:
+app.get(path, handler);       // from application.js prototype
+app.post(path, handler);
+app.use(middleware);
+app.listen(port, callback);
+app.set(setting, value);
+app.param(name, fn);
+
+// Under the hood:
+// app(req, res) → app.handle(req, res, next) → router.handle(req, res, done)
+```
+
+### Notes & gotchas
+- Express is **~2,000 lines total** — incredibly small for what it does
+- The "magic" is prototype mutation and delegation to the `router` package
+- `req` and `res` are the **same objects** Node created — Express just extends their prototypes
+- `finalhandler` is the ultimate fallback — if no middleware/route handles the request, it sends a 404/500
+- The `router` package does the actual stack iteration; Express just configures it
+- This is why `import express from "express"` works — the package's `index.js` just re-exports `lib/express.js`
+
+---
+
 # Lectures
 
 - 57. Module Introduction

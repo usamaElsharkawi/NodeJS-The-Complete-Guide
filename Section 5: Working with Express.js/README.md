@@ -1023,6 +1023,211 @@ app.listen(3000);
 
 ---
 
+# Lecture 64: Parsing Incoming Requests
+
+## What I learned
+- POST/PUT requests send data in the body — but Node's raw `IncomingMessage` delivers it as a stream of Buffer chunks, never as a ready object.
+- Express provides **built-in body-parsing middleware** (`express.json()` and `express.urlencoded()`) that reads the stream, parses it, and populates `req.body`.
+- Without body-parsing middleware, `req.body` is `undefined` — you'd have to manually collect chunks like in Section 3.
+
+### The body-parsing middleware
+```ts
+import express, {
+  type Express,
+  type Request,
+  type Response,
+} from "express";
+
+const app: Express = express();
+
+// ✅ Register BEFORE your routes — these populate req.body
+app.use(express.json());              // parses application/json
+app.use(express.urlencoded({ extended: true }));  // parses application/x-www-form-urlencoded
+```
+
+### What Content-Types do
+| Content-Type | Middleware | Result |
+|---|---|---|
+| `application/json` | `express.json()` | `req.body` = parsed JS object |
+| `application/x-www-form-urlencoded` | `express.urlencoded()` | `req.body` = parsed key/value object |
+| (none/other) | No middleware runs | `req.body` = `undefined` |
+
+### POST route with parsed body
+```ts
+// Handle form submission (HTML forms send URL-encoded by default)
+app.post("/our-product", (req: Request, res: Response) => {
+  // req.body is populated by express.urlencoded()
+  const name = typeof req.body.name === "string" ? req.body.name : "unknown";
+  const price = typeof req.body.price === "string" ? parseFloat(req.body.price) : 0;
+
+  res.send(`
+    <h1>Product Received</h1>
+    <p>Name: ${name}</p>
+    <p>Price: $${price}</p>
+  `);
+});
+
+// Handle JSON API
+app.post("/api/users", (req: Request, res: Response) => {
+  // req.body is populated by express.json()
+  const name = typeof req.body?.name === "string" ? req.body.name : "unknown";
+  const email = typeof req.body?.email === "string" ? req.body.email : "unknown";
+
+  res.json({ message: "User created", user: { name, email } });
+});
+```
+
+### The `extended` option in `express.urlencoded()`
+```ts
+// extended: true  → uses `qs` library (handles nested objects)
+app.use(express.urlencoded({ extended: true }));
+// Can parse: "user[name]=John&user[email]=john@example.com"
+// → { user: { name: "John", email: "john@example.com" } }
+
+// extended: false → uses Node's `querystring` module (flat only)
+app.use(express.urlencoded({ extended: false }));
+// Parses: "name=John&email=john@example.com" → { name: "John", email: "john@example.com" }
+```
+Use `extended: true` — it's more robust and handles nested data.
+
+### What changed from Section 3 (raw Node.js)?
+In Section 3, you manually collected body chunks:
+```ts
+// Section 3 — manual body parsing
+const chunks: Buffer[] = [];
+req.on("data", (chunk: Buffer) => chunks.push(chunk));
+req.on("end", () => {
+  const body = Buffer.concat(chunks).toString("utf-8");
+  // Then manually parse based on Content-Type...
+});
+```
+
+In Express, this is handled by middleware:
+```ts
+// Section 5 — automatic body parsing
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
+app.post("/api/users", (req, res) => {
+  console.log(req.body);  // Already parsed!
+});
+```
+
+### How to test with curl
+```bash
+# Test POST with form data
+curl -X POST http://localhost:3000/our-product \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  -d "name=Laptop&price=999"
+
+# Test POST with JSON
+curl -X POST http://localhost:3000/api/users \
+  -H "Content-Type: application/json" \
+  -d '{"name":"Usama","email":"usama@example.com"}'
+```
+
+### Updated code (your app.ts)
+```ts
+import express, {
+  type Express,
+  type Request,
+  type Response,
+  type NextFunction,
+} from "express";
+
+const app: Express = express();
+
+// Body parsing middleware — MUST be before routes
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
+// Logger middleware
+app.use("/", (req: Request, res: Response, next: NextFunction) => {
+  console.log(`${req.method} ${req.url}`);
+  next();
+});
+
+// GET routes
+app.get("/", (_req: Request, res: Response) => {
+  res.send(`
+    <h1>Home</h1>
+    <p>I am a software engineer</p>
+    <form method="POST" action="/our-product">
+      <input name="name" placeholder="Product name" />
+      <input name="price" type="number" placeholder="Price" />
+      <button type="submit">Submit</button>
+    </form>
+  `);
+});
+
+app.get("/our-product", (_req: Request, res: Response) => {
+  res.send("<h1>Our Product</h1><p>I am a Product manager</p>");
+});
+
+// POST route — handles form submissions
+app.post("/our-product", (req: Request, res: Response) => {
+  const name = typeof req.body.name === "string" ? req.body.name : "unknown";
+  const price = typeof req.body.price === "string"
+    ? parseFloat(req.body.price)
+    : 0;
+
+  res.send(`
+    <h1>Product Received</h1>
+    <p>Name: ${name}</p>
+    <p>Price: $${price}</p>
+    <a href="/">Back</a>
+  `);
+});
+
+app.listen(3000);
+```
+
+## TypeScript mapping
+```ts
+import express, {
+  type Express,
+  type Request,
+  type Response,
+} from "express";
+
+const app: Express = express();
+
+// Body-parsing middleware — adds req.body to all requests
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
+// req.body type
+app.post("/api/data", (req: Request, res: Response) => {
+  // TypeScript types req.body as 'any' — you MUST validate at runtime!
+  // This is the #1 TS error vs the JS course
+  const name = typeof req.body?.name === "string"
+    ? req.body.name
+    : "unknown";
+
+  // Or cast (less safe but common in tutorials):
+  // const { name, email } = req.body as { name: string; email: string };
+
+  res.json({ name });
+});
+```
+
+- `express.json()` returns `RequestHandler` — typed middleware for parsing JSON
+- `express.urlencoded()` returns `RequestHandler` — typed middleware for form data
+- **`req.body` is typed as `any`** — TypeScript doesn't know what shape the body will have
+- With `exactOptionalPropertyTypes` + `noUncheckedIndexedAccess`, `req.body.field` may be `undefined` — always check `typeof` or use `??`
+
+## Notes & gotchas
+- **Register body parsers BEFORE routes** — middleware order matters (Lecture 60)
+- **`req.body` is `any` by default** — validate types at runtime with `typeof` checks
+- **Empty/missing body** — `req.body` will be `{}` (empty object), not `undefined`
+- **`Content-Type` must match** — `express.json()` only parses `application/json`; `express.urlencoded()` only parses `application/x-www-form-urlencoded`
+- **No body on GET requests** — `req.body` is irrelevant for GET; use `req.query` instead
+- **Security** — body parsing exposes `req.body` which is **user-controlled input** — always validate (never trust `any`)
+- **Body size limit** — body-parser has a default 100kb limit (configurable via `limit` option)
+- **Always call `res.send()` or `res.json()`** — not `res.end()` in routes (res.send handles it)
+
+---
+
 # Lectures
 
 - 57. Module Introduction

@@ -79,6 +79,101 @@ npm start         # node app.ts
 
 ---
 
+# Lecture 79: What is the MVC?
+
+## What I learned
+- MVC stands for **Model View Controller** — a pattern for structuring code by dividing responsibilities into three main components.
+- It is a **Separation of Concerns** strategy: each component has one job, and they communicate in a defined way.
+- The pattern prevents a monolithic `app.ts` where routes, data logic, and HTML are tangled together.
+- MVC does not add new tools to Express — it imposes a **folder + responsibility contract** on top of it.
+
+```text
+┌─────────────────────────────────────────────┐
+│  Section 5: Express.js                      │
+│  ├─ Single app.ts with all routes           │
+│  ├─ Inline route handlers                  │
+│  └─ No separation of concerns               │
+├─────────────────────────────────────────────┤
+│  Section 7: MVC with Express                 │
+│  ├─ Controllers/ (request handlers)         │
+│  ├─ Models/ (data logic)                    │
+│  ├─ Views/ (UI/templates)                   │
+│  └─ app.ts (entry point only)               │
+└─────────────────────────────────────────────┘
+```
+
+### Model
+- Responsible for **representing and working with your data**.
+- Knows nothing about HTTP, routes, or HTML.
+- Reads/writes data from a backend (in this section: the **filesystem**; later: a database).
+- Exposes plain async methods like `getAll()`, `getById()`, `create()`.
+- Returns **typed data** — never `any`. The controller asks the model for data; the model does not ask the controller anything.
+
+### View
+- Responsible for **what the user sees**.
+- Should not care about application logic, routing, or data access.
+- In this section, views are **template functions** that return HTML strings.
+- The view is **passive** — it receives data and formats it. It does not call the model or the controller.
+
+### Controller
+- The **connection point** between Model and View.
+- Receives the Express `Request`, calls the appropriate **Model** method(s), passes the result to the appropriate **View**, and sends the final `Response`.
+- Intentionally thin: parse input → ask model → render view → send response.
+
+### Routes
+- Define which route should be called (points into / connects to the Controller).
+- Routes are **wiring**, not logic. `app.get("/products", productsController.getProducts)` simply says "when this path is hit, run this controller method."
+
+## Data flow in MVC
+
+```text
+HTTP Request
+     │
+     ▼
+ Route (app.get) ── points to ─▶ Controller
+                                     │
+                          ┌──────────┴──────────┐
+                          │                     │
+                          ▼                     ▼
+                      Model                  View
+                   (fetch data)         (format data)
+                          │                     │
+                          └──────────┬──────────┘
+                                     │
+                                     ▼
+                              Controller
+                              assembles result
+                                     │
+                                     ▼
+                              HTTP Response
+```
+
+**The controller is the only layer that touches both the Model and the View.** That is why it is called the "connection point."
+
+## What changed from Section 5
+
+| Section 5 (current) | Section 7 (MVC) |
+|---|---|
+| `app.get("/products", handler)` — handler does everything inline | `app.get("/products", productsController.getProducts)` — handler delegates |
+| Data logic mixed into route handler | Data logic lives in `models/` |
+| HTML strings embedded in route handler | Rendering logic separated into views |
+| Hard to test: one function does parsing + DB + HTML | Easy to test: mock model, assert controller calls it, assert view output |
+
+## TypeScript mapping
+- **Models** export **interfaces/types** for data shapes, e.g. `Product` with `id`, `title`, `price`, `description`. `exactOptionalPropertyTypes` and `noUncheckedIndexedAccess` enforce strict null-safety.
+- **Controllers** are where Express types live: `Request`, `Response`, `NextFunction`. This is the boundary where external framework types enter your code.
+- **Views** are pure functions typed as `(data: T) => string`. They never import Express.
+- **Routes** in `app.ts` remain thin wiring: `app.get("/products", shopController.getProducts)`.
+- **verbatimModuleSyntax** enforces that view files (which need no Express types) use `import type` only for any shared interfaces.
+
+## Notes & gotchas
+- MVC is an **architectural pattern**, not a framework — Express supports it but doesn't enforce it.
+- The goal is **maintainability** and **testability**: each piece can be understood, changed, and tested in isolation.
+- Section 7 builds directly on Section 5's Express knowledge.
+- Folder structure will grow as we add controllers and models in later lectures.
+
+---
+
 # Concept: MVC Deep Dive — Controller/View Relationship, Flux, and MVC Variants
 
 > Extended discussion supplementing Lecture 79.

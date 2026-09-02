@@ -1,5 +1,6 @@
 import http from "node:http";
-
+import adminRoutes from "./routes/admin.ts";
+import shopRoutes from "./routes/shop.ts";
 import express, {
   type Express,
   type Request,
@@ -9,16 +10,18 @@ import express, {
 
 const app: Express = express();
 
-app.use((req: Request, res: Response, next: NextFunction) => {
-  console.log("in the first middleware");
-  next()
-});
 
-app.use((req: Request, res: Response, next: NextFunction) => {
-  console.log("in the second middleware");
-  
-});
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 
-const server = http.createServer(app);
+app.use("/admin", adminRoutes);
+app.use("/shop",shopRoutes);
 
-server.listen(3000);
+app.use("/",(req:Request,res:Response)=>{
+  res.status(404).send("<h1>Page Not Found 404</h1>")
+})
+
+app.listen(3000);
+
+
+   

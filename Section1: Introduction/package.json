@@ -1,19 +1,15 @@
 {
   "name": "nodejs-complete-guide-section1",
   "version": "1.0.0",
-  "description": "Section 1: Introduction — Node.js concepts re-implemented in TypeScript",
+  "description": "Section 1: Introduction - Node.js + TypeScript (native TS via Node)",
   "main": "app.ts",
-  "type": "commonjs",
-    "scripts": {
-    "start": "./node_modules/.bin/ts-node app.ts",
-    "build": "./node_modules/.bin/tsc",
-    "dev": "./node_modules/.bin/ts-node app.ts",
-    "watch": "./node_modules/.bin/ts-node --watch app.ts",
-    "lint": "./node_modules/.bin/tsc --noEmit"
+  "type": "module",
+  "scripts": {
+    "start": "node app.ts",
+    "lint": "tsc --noEmit"
   },
   "devDependencies": {
-    "@types/node": "^26.2.0",
-    "ts-node": "^10.9.0",
-    "typescript": "^5.5.0"
+    "@types/node": "^22.15.0",
+    "typescript": "^5.7.0"
   }
 }

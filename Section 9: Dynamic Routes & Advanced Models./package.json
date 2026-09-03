@@ -1,0 +1,21 @@
+{
+  "name": "nodejs-complete-guide-section9",
+  "version": "1.0.0",
+  "description": "Section 9: Dynamic Routes & Advanced Models - Node.js + TypeScript",
+  "main": "app.ts",
+  "type": "module",
+  "scripts": {
+    "start": "./node_modules/.bin/nodemon --exec \"node --experimental-strip-types\" app.ts",
+    "lint": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.0",
+    "@types/node": "^22.15.0",
+    "nodemon": "^3.1.14",
+    "typescript": "^5.7.0"
+  },
+  "dependencies": {
+    "ejs": "^3.1.10",
+    "express": "^5.2.1"
+  }
+}

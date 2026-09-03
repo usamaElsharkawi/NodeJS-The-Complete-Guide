@@ -200,6 +200,116 @@ After (with controllers):
 └─────────────────────────────────────────────────────────────┘
 ```
 
+
+## Mindset for splitting controllers
+
+Think of controllers as **use-case organizers**, not route containers. The split is driven by **domain boundaries**, not by HTTP paths.
+
+### The core mindset
+
+A controller answers: *"What can a user do with this part of the domain?"*
+
+If you can describe a set of related actions using one noun, those actions likely belong in the same controller.
+
+| Domain concept | Typical actions | Controller name |
+|---|---|---|
+| Products | List, add, view, edit | `ProductsController` |
+| Admin area | Dashboard, user management, settings | `AdminController` |
+| Authentication | Login, logout, signup, forgot-password | `AuthController` |
+| Cart | Add item, remove item, checkout | `CartController` |
+
+You split by **what the user is working with**, not by URL prefix.
+
+### Practical rules
+
+#### 1. One controller per domain resource
+If your app has `products` and `users`, you should have at least two controllers — even if one of them only has one route today.
+
+```ts
+// controller/products.ts
+export const getProducts = ...
+export const postAddProduct = ...
+
+// controller/users.ts
+export const getUsers = ...
+```
+
+Why? Because `products` and `users` are different domain concepts. Tomorrow you might add 20 product routes and 30 user routes. If you stuffed them all into one `controller/products.ts`, that file becomes a meaningless grab-bag.
+
+#### 2. A controller owns its own data flow
+A controller should fetch from its own model, call its own views, and send its own response. It should not reach into another controller's data.
+
+```ts
+// ✅ ProductsController handles everything product-related
+export const getProducts = (req, res) => {
+  const products = productModel.getAll();
+  const html = shopView.renderList(products);
+  res.send(html);
+};
+
+// ❌ Bad: ProductsController mutating user data
+export const postAddProduct = (req, res) => {
+  userModel.incrementActiveCount(); // wrong domain!
+};
+```
+
+#### 3. Router files are just address books
+The router file's only job is: *"when this path arrives, call this controller method."*
+
+```ts
+// routes/products.ts — thin, no logic
+router.get('/', productsController.getProducts);
+router.post('/add', productsController.postAddProduct);
+```
+
+If you find yourself writing logic inside a router file, move it to the controller.
+
+#### 4. Keep related views together with their controller
+In this section we are using EJS templates. The convention is that views for a controller live in the same `views/` folder, named to match the controller's domain:
+
+```
+views/
+  shop.ejs          ← rendered by ProductsController.getProducts
+  add-product.ejs   ← rendered by ProductsController.getAddProduct
+  404.ejs           ← global fallback
+```
+
+The view filenames don't have to mirror the controller exactly, but the **responsibility** should: if `ProductsController` renders it, that view is a product view.
+
+### When to create a new controller file
+
+Create a new controller when **any** of these are true:
+
+1. **You can name it with a single noun** — `products`, `auth`, `cart`, `admin`
+2. **It has its own model** — it talks to a different data source or table
+3. **It has its own views** — the UI concerns are separate from existing controllers
+4. **You can describe its purpose in one sentence** without mentioning another controller
+
+Don't create a new controller just because you have two routes. A controller with one route is fine if that route belongs to a distinct domain concept.
+
+### When NOT to split
+
+Don't create a controller for every single route. These are NOT valid reasons to split:
+
+- "This route is on a different URL path" → URL paths are router concerns, not controller concerns
+- "This is an admin page" → `admin/` is a URL prefix, not necessarily a different domain. Admin product routes can still live in `ProductsController`
+- "This returns JSON instead of HTML" → format is a view concern, not a controller boundary
+
+### Mental model
+
+```text
+Your app = a set of domain concepts (products, users, orders, auth)
+
+Each domain concept gets:
+  ├─ A model       (how to read/write its data)
+  ├─ A controller  (what you can DO with it)
+  └─ Views         (how you SEE it)
+
+Router = a flat table mapping URLs → controller methods
+```
+
+The router knows about **URLs**. The controller knows about **domain logic**. The model knows about **data**. The view knows about **presentation**.
+
 ## What I implemented
 
 ### 1. Created `controller/products.ts`

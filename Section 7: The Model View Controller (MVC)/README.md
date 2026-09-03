@@ -44,7 +44,7 @@ npm start         # node app.ts
 
 ---
 
-# Lecture 78: Module Introduction
+# Lecture 96: Module Introduction
 
 ## What I learned
 - Section 7 introduces the **Model View Controller (MVC)** pattern — a way to structure Node.js applications for better maintainability and separation of concerns.
@@ -79,7 +79,7 @@ npm start         # node app.ts
 
 ---
 
-# Lecture 79: What is the MVC?
+# Lecture 97: What is the MVC?
 
 ## What I learned
 - MVC stands for **Model View Controller** — a pattern for structuring code by dividing responsibilities into three main components.
@@ -166,17 +166,195 @@ HTTP Request
 - **Routes** in `app.ts` remain thin wiring: `app.get("/products", shopController.getProducts)`.
 - **verbatimModuleSyntax** enforces that view files (which need no Express types) use `import type` only for any shared interfaces.
 
+---
+
+# Lecture 98: Adding Controllers
+
+## What I learned
+- **Controllers** are the "connection point" between Model and View — they receive the request, ask the model for data, pass it to the view, and send the response.
+- In the starting project, route handlers did everything inline: parsing input, rendering templates, and redirecting. Controllers extract that logic into dedicated functions.
+- A controller should be **thin**: parse input → ask model → render view → send response. It should not contain business logic or data-access code (that moves to the Model later).
+- The mindset for splitting controllers: **one controller per domain resource** (e.g. `ProductsController`, `AuthController`), not per URL path.
+
+```text
+Before (starting project):
+┌─────────────────────────────────────────────────────────────┐
+│  routes/shop.js                                             │
+│  router.get('/', (req, res, next) => {                      │
+│    // ALL logic here:                                     │
+│    // - imports data from admin.js                        │
+│    // - calls res.render() with template + data           │
+│  })                                                        │
+└─────────────────────────────────────────────────────────────┘
+
+After (with controllers):
+┌─────────────────────────────────────────────────────────────┐
+│  routes/shop.ts                                            │
+│  router.get('/', getProducts);  ← thin wiring only         │
+│                                                             │
+│  controller/products.ts                                    │
+│  export const getProducts = (req, res) => {                │
+│    const products = productModel.getAll();                 │
+│    res.render('shop', { prods: products, ... });           │
+│  };                                                        │
+└─────────────────────────────────────────────────────────────┘
+```
+
+## What I implemented
+
+### 1. Created `controller/products.ts`
+Extracted all route handler logic from `routes/shop.ts` and `routes/admin.ts` into dedicated controller functions:
+
+```ts
+// controller/products.ts
+import { type Request, type Response, type NextFunction } from "express";
+
+export const getAddProduct = (req: Request, res: Response, next: NextFunction) => {
+  res.render("add-product", {
+    pageTitle: "Add Product",
+    path: "/admin/add-product",
+    formsCSS: true,
+    productCSS: true,
+    activeAddProduct: true,
+  });
+};
+
+export const postAddProduct = (req: Request, res: Response, next: NextFunction) => {
+  products.push({ title: req.body.title ?? "" });
+  res.redirect("/");
+};
+
+export const getProducts = (req: Request, res: Response, next: NextFunction) => {
+  res.render("shop", {
+    prods: products,
+    pageTitle: "Shop",
+    path: "/",
+    hasProducts: products.length > 0,
+    activeShop: true,
+    productCSS: true,
+  });
+};
+```
+
+### 2. Updated `routes/shop.ts` to use the controller
+```ts
+// routes/shop.ts
+import express from "express";
+import { getProducts } from "../controller/products.ts";
+
+const router = express.Router();
+
+router.get("/", getProducts);
+
+export default router;
+```
+
+### 3. Updated `routes/admin.ts` to use the controller
+```ts
+// routes/admin.ts
+import express from "express";
+import { getAddProduct, postAddProduct } from "../controller/products.ts";
+
+const router = express.Router();
+
+router.get("/add-product", getAddProduct);
+router.post("/add-product", postAddProduct);
+
+export const routes = router;
+```
+
+### 4. Removed shared state from router files
+In the starting project, `routes/admin.js` exported both the router and the `products` array, and `routes/shop.js` imported that array directly. The controller now owns that shared state, so route files no longer need to import from each other.
+
+```ts
+// routes/shop.ts — no longer imports from admin
+import { getProducts } from "../controller/products.ts";
+```
+
+## TypeScript mapping
+- Controllers are **typed functions**: `(req: Request, res: Response, next: NextFunction) => void`.
+- `verbatimModuleSyntax` requires explicit `import type` for `Request`, `Response`, `NextFunction` because they are type-only imports from `"express"`.
+- Route files are **value imports only** — they import controller functions as runtime values, not types.
+- Controller files are the **boundary** where Express types enter the application logic. Below the controller, you should not see Express types.
+
 ## Notes & gotchas
-- MVC is an **architectural pattern**, not a framework — Express supports it but doesn't enforce it.
-- The goal is **maintainability** and **testability**: each piece can be understood, changed, and tested in isolation.
-- Section 7 builds directly on Section 5's Express knowledge.
-- Folder structure will grow as we add controllers and models in later lectures.
+- **Controllers are not classes** in this section — they are plain exported functions. The course may introduce classes later.
+- **One controller per domain resource**: `controller/products.ts` owns all product-related actions. If you later add user management, that would be `controller/users.ts`, not more functions in `products.ts`.
+- **Route files should contain zero business logic** — they are just a mapping table: `path → controller function`.
+- **Controllers should not import from other controllers** — they communicate through models, not through each other.
+- The `next: NextFunction` parameter is required for type correctness, even if the controller does not currently call `next()`. This allows future error handling middleware to catch errors from these controllers.
+- **Order of middleware matters**: `express.urlencoded()` must be registered before controllers that read `req.body`.
+
+---
+
+# Lecture 99: Finishing the Controllers
+
+## What I learned
+- Lecture 98 created the controller structure; Lecture 99 finalizes it by ensuring all route handlers live in controllers and the route files are clean.
+- The goal is **separation of concerns**: `app.ts` = configuration, `routes/*.ts` = URL-to-controller mapping, `controller/*.ts` = request handling logic.
+- By the end of Lecture 99, the app is ready for the next step: extracting the shared data logic into a proper **Model**.
+
+## What I implemented
+
+### Final folder structure after Lecture 99
+
+```
+section7/
+├── app.ts                        # entry point + middleware + router mounts
+├── routes/
+│   ├── admin.ts                  # thin admin router
+│   └── shop.ts                   # thin shop router
+├── controller/
+│   └── products.ts               # all product controller logic
+├── views/
+│   ├── shop.ejs
+│   ├── add-product.ejs
+│   ├── 404.ejs
+│   └── includes/
+│       ├── head.ejs
+│       ├── navigation.ejs
+│       └── end.ejs
+├── public/
+│   └── css/
+│       ├── main.css
+│       ├── product.css
+│       └── forms.css
+├── util/
+│   └── path.ts
+├── package.json
+├── tsconfig.json
+└── README.md
+```
+
+### What was removed / cleaned up
+- **Removed inline route handlers** from router files. All logic now lives in `controller/products.ts`.
+- **Removed cross-router imports**. `routes/shop.ts` no longer imports the `products` array from `routes/admin.ts`.
+- **Removed unused `util/path.ts` from router files**. The starting project used `rootDir` in router files; our controllers do not need it yet.
+
+### What remains (to be refactored in Lecture 100+)
+- The `products` array is still exported from `controller/products.ts`. This is shared mutable state that should move to a dedicated **Model**.
+- Controller functions are tightly coupled to EJS rendering (`res.render`). This will be separated into **Views** in later lectures.
+- No file persistence yet — data is lost when the server restarts.
+
+## TypeScript mapping
+- All controller functions are **named exports** so they can be imported by route files.
+- `Request`, `Response`, `NextFunction` are imported with `import { type ... }` to satisfy `verbatimModuleSyntax`.
+- Route files import controller functions as **values**: `import { getProducts } from "../controller/products.ts"`.
+- No Express types leak into views or models at this stage.
+
+## Notes & gotchas
+- **Do not put business logic in controllers yet**. Controllers should only orchestrate: parse input → ask model → render view → send response. Data access logic will move to the Model in Lecture 100.
+- **Do not create controller classes yet**. The course uses plain functions for now. Classes may be introduced later for dependency injection.
+- **Keep controllers focused**. If `controller/products.ts` grows beyond ~200 lines, consider splitting into `controller/products-list.ts` and `controller/products-add.ts`. But for now, one file per domain resource is correct.
+- **The controller is not the Model**. Having `products` array in `controller/products.ts` is temporary — it will move to `models/product.ts` in Lecture 100. Do not treat the controller as permanent storage.
+- **Route files are address books**. If a route file grows beyond 20–30 lines, it usually means you need more controller files, not more logic in the route file.
 
 ---
 
 # Concept: MVC Deep Dive — Controller/View Relationship, Flux, and MVC Variants
 
-> Extended discussion supplementing Lecture 79.
+> Extended discussion supplementing Lecture 97.
+
 
 ## What I learned
 - MVC is not a single fixed pattern — there are **two distinct flavors** with opposite rules about who talks to whom.

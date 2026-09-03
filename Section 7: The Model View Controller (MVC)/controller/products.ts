@@ -1,6 +1,5 @@
 import { type Request, type Response, type NextFunction } from "express";
-
-export const products: Array<{ id?: string; title: string }> = [];
+import { Product } from "../models/product.ts";
 
 export const getAddProduct = (
   req: Request,
@@ -21,7 +20,9 @@ export const postAddProduct = (
   res: Response,
   next: NextFunction,
 ) => {
-  products.push({ title: req.body.title ?? "" });
+  const title = typeof req.body.title === "string" ? req.body.title : "";
+  const newProduct = new Product(title);
+  newProduct.save();
   res.redirect("/");
 };
 
@@ -30,6 +31,7 @@ export const getProducts = (
   res: Response,
   next: NextFunction,
 ) => {
+  const products = Product.getAll();
   res.render("shop", {
     prods: products,
     pageTitle: "Shop",

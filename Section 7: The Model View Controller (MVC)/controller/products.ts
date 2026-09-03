@@ -21,7 +21,7 @@ export const postAddProduct = (
   next: NextFunction,
 ) => {
   const title = typeof req.body.title === "string" ? req.body.title : "";
-  const newProduct = new Product(title);
+  const newProduct = new Product(Math.random().toString(36).slice(2, 9), title);
   newProduct.save();
   res.redirect("/");
 };

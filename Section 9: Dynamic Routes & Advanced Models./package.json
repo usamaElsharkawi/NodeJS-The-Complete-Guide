@@ -5,7 +5,7 @@
   "main": "app.ts",
   "type": "module",
   "scripts": {
-    "start": "./node_modules/.bin/nodemon --exec \"node --experimental-strip-types\" app.ts",
+    "start": "./node_modules/.bin/nodemon --ignore \"data/*.json\" --exec \"node --experimental-strip-types\" app.ts",
     "lint": "tsc --noEmit"
   },
   "devDependencies": {

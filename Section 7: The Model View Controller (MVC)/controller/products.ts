@@ -22,8 +22,9 @@ export const postAddProduct = (
 ) => {
   const title = typeof req.body.title === "string" ? req.body.title : "";
   const newProduct = new Product(Math.random().toString(36).slice(2, 9), title);
-  newProduct.save();
-  res.redirect("/");
+  newProduct.save(() => {
+    res.redirect("/");
+  });
 };
 
 export const getProducts = (
@@ -31,13 +32,14 @@ export const getProducts = (
   res: Response,
   next: NextFunction,
 ) => {
-  const products = Product.getAll();
-  res.render("shop", {
-    prods: products,
-    pageTitle: "Shop",
-    path: "/",
-    hasProducts: products.length > 0,
-    activeShop: true,
-    productCSS: true,
+  Product.getAll((products) => {
+    res.render("shop", {
+      prods: products,
+      pageTitle: "Shop",
+      path: "/",
+      hasProducts: products.length > 0,
+      activeShop: true,
+      productCSS: true,
+    });
   });
 };

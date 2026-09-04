@@ -3,7 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const dataFilePath = path.join(__dirname, "data", "products.json");
+const dataFilePath = path.join(__dirname, "..", "data", "products.json");
 
 export interface Product {
   id: string;
@@ -19,7 +19,7 @@ export class Product {
     this.title = title;
   }
 
-  save(): void {
+  save(callback: () => void): void {
     fs.readFile(dataFilePath, (err, fileContent) => {
       let products: Product[] = [];
       if (!err) {
@@ -30,18 +30,29 @@ export class Product {
 
       fs.writeFile(dataFilePath, JSON.stringify(products), (err) => {
         if (err) console.error(err);
+        callback();
       });
     });
   }
 
-  static getAll(): Product[] {
-    const fileContent = fs.readFileSync(dataFilePath);
-    const products = JSON.parse(fileContent.toString()) as Product[];
-    return products;
+  static getAll(callback: (products: Product[]) => void): void {
+    fs.readFile(dataFilePath, (err, fileContent) => {
+      if (err) {
+        callback([]);
+        return;
+      }
+
+      const products = JSON.parse(fileContent.toString()) as Product[];
+      callback(products);
+    });
   }
 
-  static getById(id: string): Product | undefined {
-    const products = Product.getAll();
-    return products.find((p) => p.id === id);
+  static getById(
+    id: string,
+    callback: (product: Product | undefined) => void,
+  ): void {
+    Product.getAll((products) => {
+      callback(products.find((p) => p.id === id));
+    });
   }
 }

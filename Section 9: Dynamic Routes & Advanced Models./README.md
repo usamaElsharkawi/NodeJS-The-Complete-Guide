@@ -327,6 +327,70 @@ if (!id) {
 }
 ```
 
+### Delete Pattern (Lecture 127)
+
+The `Product.deleteById` static method removes a product and cascades the delete to any cart containing it:
+
+```ts
+// models/product.ts
+static deleteById(id: string, cb?: () => void): void {
+  getProductsFromFile((products) => {
+    const product = products.find((prod) => prod.id === id);  // 1. Find product first
+    const updatedProducts = products.filter((prod) => prod.id !== id);  // 2. Filter OUT the deleted one
+    fs.writeFile(dataFilePath, JSON.stringify(updatedProducts), (err) => {
+      if (!err && product) {
+        Cart.deleteProduct(id, product.price, cb);  // 3. Cascade to cart
+      } else {
+        cb?.();
+      }
+    });
+  });
+}
+```
+
+**Three-step delete:**
+
+| Step | Action | Why |
+|------|--------|-----|
+| 1 | Find product first | Need its `price` for cart cleanup |
+| 2 | `filter()` excludes by id | Creates new array without the item — cleaner than splice/index tracking |
+| 3 | Cascade to `Cart.deleteProduct` | Remove from any cart containing it |
+
+**The `filter()` approach:**
+
+```ts
+// ❌ Bad: splice with index tracking (error-prone)
+const index = products.findIndex((p) => p.id === id);
+if (index !== -1) products.splice(index, 1);
+
+// ✅ Good: filter creates new array (immutable, no index math)
+const updatedProducts = products.filter((prod) => prod.id !== id);
+```
+
+**Controller usage:**
+
+```ts
+// controller/admin.ts
+export const postDeleteProduct = (req: Request, res: Response) => {
+  const prodId = req.params.productId;
+  const id = Array.isArray(prodId) ? prodId[0] : prodId;
+  if (!id) {
+    res.redirect("/admin/products");
+    return;
+  }
+  Product.deleteById(id, () => {
+    res.redirect("/admin/products");
+  });
+};
+```
+
+**Route:**
+
+```ts
+// routes/admin.ts
+router.post("/delete-product/:productId", postDeleteProduct);
+```
+
 ---
 
 ## TypeScript Patterns Used
@@ -366,20 +430,22 @@ Shorthand for assigning a default value directly on the property without listing
 Section 9/
 ├── app.ts                    # entry point
 ├── controller/
-│   ├── admin.ts              # admin product management
-│   ├── error.ts             # 404 handler
-│   └── shop.ts              # shop routes + product detail
+│   ├── admin.ts              # admin product management + delete
+│   ├── error.ts              # 404 handler
+│   └── shop.ts               # shop routes + product detail + cart
 ├── models/
-│   └── product.ts            # Product class + file persistence
+│   ├── product.ts            # Product class + file persistence
+│   └── cart.ts               # Cart class + cart.json persistence
 ├── routes/
-│   ├── admin.ts             # /admin/* routes
+│   ├── admin.ts              # /admin/* routes
 │   └── shop.ts              # /, /products, /cart, /orders, /checkout
 ├── util/
-│   └── path.ts              # __dirname ESM workaround
+│   └── path.ts               # __dirname ESM workaround
 ├── views/
 │   ├── 404.ejs
 │   ├── admin/
 │   │   ├── add-product.ejs
+│   │   ├── edit-product.ejs  # edit form with ?edit=true
 │   │   └── products.ejs
 │   ├── includes/
 │   │   ├── head.ejs

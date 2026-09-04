@@ -121,6 +121,108 @@ router.get("/products/:productId", getProduct);
 
 Express matches routes in order. `/products` (literal) must come before `/products/:productId` so that `/products/123` doesn't get matched as a product list request.
 
+### Query Parameters (Lectures 124–125)
+
+Query parameters are the part of the URL **after the `?` symbol**. They pass optional data to the server as key-value pairs.
+
+```
+/admin/edit-product/abc123?edit=true
+                           ↑
+                    query params
+```
+
+Multiple params are separated by `&`:
+```
+/products?category=books&page=2&sort=asc
+```
+
+#### Three Types of URL Data in Express
+
+| Source | URL Part | Example | Access |
+|--------|----------|---------|--------|
+| **Route params** | `:productId` in path | `/products/:productId` | `req.params.productId` |
+| **Query params** | After `?` | `/products?edit=true` | `req.query.edit` |
+| **Body** | Form fields, JSON | POST form data | `req.body.title` |
+
+#### Query Params Are Always Strings
+
+Even if the URL looks like `?page=2`, `req.query.page` is the **string** `"2"`, not the number `2`. You must convert manually:
+
+```ts
+const page = Number(req.query.page);        // string "2" → number 2
+const editMode = req.query.edit === 'true'; // string "true" → boolean true
+```
+
+#### Why `=== 'true'` and Not Just `if (req.query.edit)`?
+
+In JavaScript, a non-empty string is **truthy**:
+
+```ts
+Boolean("false")  // true  ← string "false" is still truthy!
+Boolean("")       // false ← only empty string is falsy
+```
+
+So `if (req.query.edit)` would treat `?edit=false` as truthy and show the edit form when it shouldn't. Using `=== 'true'` is explicit and correct.
+
+#### Used in our project
+
+In `controller/admin.ts`:
+```ts
+export const getEditProduct = (req: Request, res: Response) => {
+  const editMode = req.query.edit === 'true';
+  const prodId = req.params.productId;
+  const id = Array.isArray(prodId) ? prodId[0] : prodId;
+  if (!editMode) {
+    res.redirect("/");
+    return;
+  }
+  if (!id) {
+    res.redirect("/");
+    return;
+  }
+  Product.findById(id, (product) => {
+    if (!product) {
+      res.redirect("/");
+      return;
+    }
+    res.render("admin/edit-product", {
+      pageTitle: "Edit Product",
+      path: "/admin/edit-product",
+      editing: editMode,
+      product: product,
+    });
+  });
+};
+```
+
+The link in `views/admin/products.ejs`:
+```html
+<a href="/admin/edit-product/<%= product.id %>?edit=true" class="btn">Edit</a>
+```
+
+When you click Edit, the URL becomes `/admin/edit-product/abc123?edit=true`, and `req.query.edit` is `"true"`.
+
+#### Common Use Cases
+
+- **Pagination**: `?page=2&limit=10`
+- **Filtering**: `?category=books&minPrice=10`
+- **Search**: `?q=nodejs`
+- **Sorting**: `?sort=price&order=asc`
+- **Mode toggles**: `?edit=true`, `?preview=true`
+
+#### Type Safety with Express 5
+
+In Express 5, `req.params` and `req.query` are both typed with `noUncheckedIndexedAccess: true`, meaning accessing a property could be `undefined`. Always guard:
+
+```ts
+const prodId = req.params.productId;
+const id = Array.isArray(prodId) ? prodId[0] : prodId;
+if (!id) {
+  res.redirect("/");
+  return;
+}
+```
+
 ---
 
 ## TypeScript Patterns Used
